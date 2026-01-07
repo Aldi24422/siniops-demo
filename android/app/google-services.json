@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "855120160452",
+    "project_id": "siniops",
+    "storage_bucket": "siniops.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:855120160452:android:5f41bfcc9d76dfebf74b91",
+        "android_client_info": {
+          "package_name": "com.siniops.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDuSzl5tcUhPImnqUDjWItlbli6m9qk_5I"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

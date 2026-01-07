@@ -1,0 +1,6 @@
+{
+    "java.configuration.updateBuildConfiguration": "automatic",
+    "cmake.ignoreCMakeListsMissing": true,
+    "editor.guides.highlightActiveIndentation": false,
+    "editor.guides.indentation": false
+}

@@ -1,0 +1,42 @@
+
+FAILURE: Build failed with an exception.
+
+* Where:
+Settings file 'R:\Projects\siniops\android\settings.gradle.kts' line: 20
+
+* What went wrong:
+Error resolving plugin [id: 'dev.flutter.flutter-plugin-loader', version: '1.0.0']
+> A problem occurred configuring project ':gradle'.
+   > Multiple build operations failed.
+         Could not read workspace metadata from C:\Users\aldi\.gradle\caches\8.13\transforms\f2f6a7c5bfaf9749d48f3bb8180a4eda\metadata.bin
+         Could not read workspace metadata from C:\Users\aldi\.gradle\caches\8.13\transforms\ec00c8dfddc36288bb0eb95d9d3e2e75\metadata.bin
+         Could not read workspace metadata from C:\Users\aldi\.gradle\caches\8.13\transforms\cdbd4be15ebe1251bcfa3282a80c575a\metadata.bin
+         Could not read workspace metadata from C:\Users\aldi\.gradle\caches\8.13\transforms\ddbcc95240b52c6e3d609ac7c2ebd2ee\metadata.bin
+         Could not read workspace metadata from C:\Users\aldi\.gradle\caches\8.13\transforms\2a006276d061a7dacb5f39f3a4b161fd\metadata.bin
+         Could not read workspace metadata from C:\Users\aldi\.gradle\caches\8.13\transforms\3fdbd06e74b8844ba88a4f0b4c7d5d14\metadata.bin
+         Could not read workspace metadata from C:\Users\aldi\.gradle\caches\8.13\transforms\b92259916cfa8d3453e72345084b0abf\metadata.bin
+         Could not read workspace metadata from C:\Users\aldi\.gradle\caches\8.13\transforms\4515da6671b69fb128505938dbdb32ed\metadata.bin
+         Could not read workspace metadata from C:\Users\aldi\.gradle\caches\8.13\transforms\ac4cde932698e78796dde757a47688b5\metadata.bin
+         Could not read workspace metadata from C:\Users\aldi\.gradle\caches\8.13\transforms\681d75d9439c1017c8126d4c938dc858\metadata.bin
+         ...and 3 more failures.
+      > Could not read workspace metadata from C:\Users\aldi\.gradle\caches\8.13\transforms\f2f6a7c5bfaf9749d48f3bb8180a4eda\metadata.bin
+      > Could not read workspace metadata from C:\Users\aldi\.gradle\caches\8.13\transforms\ec00c8dfddc36288bb0eb95d9d3e2e75\metadata.bin
+      > Could not read workspace metadata from C:\Users\aldi\.gradle\caches\8.13\transforms\cdbd4be15ebe1251bcfa3282a80c575a\metadata.bin
+      > Could not read workspace metadata from C:\Users\aldi\.gradle\caches\8.13\transforms\ddbcc95240b52c6e3d609ac7c2ebd2ee\metadata.bin
+      > Could not read workspace metadata from C:\Users\aldi\.gradle\caches\8.13\transforms\2a006276d061a7dacb5f39f3a4b161fd\metadata.bin
+      > Could not read workspace metadata from C:\Users\aldi\.gradle\caches\8.13\transforms\3fdbd06e74b8844ba88a4f0b4c7d5d14\metadata.bin
+      > Could not read workspace metadata from C:\Users\aldi\.gradle\caches\8.13\transforms\b92259916cfa8d3453e72345084b0abf\metadata.bin
+      > Could not read workspace metadata from C:\Users\aldi\.gradle\caches\8.13\transforms\4515da6671b69fb128505938dbdb32ed\metadata.bin
+      > Could not read workspace metadata from C:\Users\aldi\.gradle\caches\8.13\transforms\ac4cde932698e78796dde757a47688b5\metadata.bin
+      > Could not read workspace metadata from C:\Users\aldi\.gradle\caches\8.13\transforms\681d75d9439c1017c8126d4c938dc858\metadata.bin
+      > Could not read workspace metadata from C:\Users\aldi\.gradle\caches\8.13\transforms\6a74fff8916b598a2b85daf6c8333605\metadata.bin
+      > Could not read workspace metadata from C:\Users\aldi\.gradle\caches\8.13\transforms\51cd6c986146dea5b5da7cb68a8a99a0\metadata.bin
+      > Could not read workspace metadata from C:\Users\aldi\.gradle\caches\8.13\transforms\161bbef99ba6c13f50d79c662481d28f\metadata.bin
+
+* Try:
+> Run with --stacktrace option to get the stack trace.
+> Run with --info or --debug option to get more log output.
+> Run with --scan to get full insights.
+> Get more help at https://help.gradle.org.
+
+BUILD FAILED in 1s
