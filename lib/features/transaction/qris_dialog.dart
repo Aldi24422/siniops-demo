@@ -14,14 +14,18 @@ import '../receipt/receipt_preview_widget.dart';
 
 class QrisDialog extends StatefulWidget {
   final double amount;
+
   final List<Product> cartItems;
-  final String? cashierUid;
+  final String? staffUid;
+  final String? staffName;
 
   const QrisDialog({
     super.key,
     required this.amount,
     required this.cartItems,
-    this.cashierUid,
+
+    this.staffUid,
+    this.staffName,
   });
 
   @override
@@ -225,8 +229,8 @@ class _QrisDialogState extends State<QrisDialog> with WidgetsBindingObserver {
       final result = await _transactionController.processTransaction(
         cartItems: widget.cartItems,
         totalAmount: widget.amount,
-        paymentMethod: 'qris',
-        cashierUid: widget.cashierUid,
+        paymentMethod: 'QRIS',
+        staffUid: widget.staffUid,
       );
 
       if (!mounted || _isDisposed) return;
@@ -258,6 +262,169 @@ class _QrisDialogState extends State<QrisDialog> with WidgetsBindingObserver {
         ),
       );
     }
+  }
+
+  /// Show printer picker popup when printer is offline
+  Future<void> _showPrinterPickerDialog(StateSetter setDialogState) async {
+    // First try auto-reconnect
+    final autoConnected = await _printerService.autoReconnect();
+    if (autoConnected) {
+      setDialogState(() {});
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              "✅ Terhubung ke ${_printerService.connectedDevice?.name ?? 'printer'}",
+            ),
+            backgroundColor: AppColors.success,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+      return;
+    }
+
+    if (!mounted) return;
+
+    showDialog(
+      context: context,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (context, setPickerState) {
+            return AlertDialog(
+              title: Row(
+                children: [
+                  const Icon(Icons.bluetooth, color: AppColors.primary),
+                  const SizedBox(width: 12),
+                  Text(
+                    "Pilih Printer",
+                    style: GoogleFonts.poppins(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 16,
+                    ),
+                  ),
+                ],
+              ),
+              content: FutureBuilder<List<PrinterDevice>>(
+                future: _printerService.scanDevices(),
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return const SizedBox(
+                      height: 100,
+                      child: Center(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            CircularProgressIndicator(),
+                            SizedBox(height: 12),
+                            Text("Mencari printer..."),
+                          ],
+                        ),
+                      ),
+                    );
+                  }
+
+                  final devices = snapshot.data ?? [];
+
+                  if (devices.isEmpty) {
+                    return SizedBox(
+                      height: 100,
+                      child: Center(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.print_disabled,
+                              size: 40,
+                              color: Colors.grey[400],
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              "Tidak ada printer ditemukan",
+                              style: GoogleFonts.lexendDeca(
+                                color: AppColors.textSecondary,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  }
+
+                  return SizedBox(
+                    width: double.maxFinite,
+                    child: ListView.builder(
+                      shrinkWrap: true,
+                      itemCount: devices.length,
+                      itemBuilder: (context, index) {
+                        final device = devices[index];
+                        return ListTile(
+                          leading: const CircleAvatar(
+                            backgroundColor: AppColors.background,
+                            child: Icon(Icons.print, color: AppColors.primary),
+                          ),
+                          title: Text(
+                            device.name,
+                            style: GoogleFonts.lexendDeca(
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                          subtitle: Text(
+                            device.address,
+                            style: GoogleFonts.lexendDeca(
+                              fontSize: 12,
+                              color: AppColors.textSecondary,
+                            ),
+                          ),
+                          onTap: () async {
+                            Navigator.pop(dialogContext);
+                            // Capture messenger before async gap
+                            final messenger = ScaffoldMessenger.of(context);
+                            messenger.showSnackBar(
+                              SnackBar(
+                                content: Text(
+                                  "Menghubungkan ke ${device.name}...",
+                                ),
+                                duration: const Duration(seconds: 2),
+                              ),
+                            );
+                            final result = await _printerService
+                                .connectWithRetry(device);
+                            if (mounted) {
+                              messenger.clearSnackBars();
+                              messenger.showSnackBar(
+                                SnackBar(
+                                  content: Text(
+                                    result.success
+                                        ? "✅ ${result.message}"
+                                        : "❌ ${result.message}",
+                                  ),
+                                  backgroundColor: result.success
+                                      ? AppColors.success
+                                      : AppColors.error,
+                                  behavior: SnackBarBehavior.floating,
+                                ),
+                              );
+                              setDialogState(() {});
+                            }
+                          },
+                        );
+                      },
+                    ),
+                  );
+                },
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogContext),
+                  child: const Text("Batal"),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
   }
 
   /// Show receipt preview dialog after successful transaction
@@ -315,8 +482,10 @@ class _QrisDialogState extends State<QrisDialog> with WidgetsBindingObserver {
                       child: ReceiptPreviewWidget(
                         items: widget.cartItems,
                         totalAmount: widget.amount,
-                        paymentMethod: 'qris',
+                        paymentMethod: 'QRIS',
                         transactionId: transactionId,
+                        staffName: widget.staffName,
+                        footer: "Terima Kasih",
                       ),
                     ),
                   ),
@@ -369,13 +538,20 @@ class _QrisDialogState extends State<QrisDialog> with WidgetsBindingObserver {
                       ),
                       const SizedBox(width: 12),
 
-                      // Print Button
+                      // Print Button - always clickable
                       Expanded(
                         flex: 2,
                         child: ElevatedButton.icon(
-                          onPressed: isPrinting || !_printerService.isConnected
+                          onPressed: isPrinting
                               ? null
                               : () async {
+                                  if (!_printerService.isConnected) {
+                                    await _showPrinterPickerDialog(
+                                      setDialogState,
+                                    );
+                                    return;
+                                  }
+
                                   setDialogState(() => isPrinting = true);
                                   try {
                                     final success = await _printerService
@@ -428,19 +604,17 @@ class _QrisDialogState extends State<QrisDialog> with WidgetsBindingObserver {
                               : Icon(
                                   _printerService.isConnected
                                       ? Icons.print
-                                      : Icons.print_disabled,
+                                      : Icons.bluetooth_searching,
                                 ),
                           label: Text(
                             isPrinting
                                 ? "Mencetak..."
                                 : _printerService.isConnected
                                 ? "Cetak Struk"
-                                : "Printer Offline",
+                                : "Hubungkan Printer",
                           ),
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: _printerService.isConnected
-                                ? AppColors.secondary
-                                : Colors.grey,
+                            backgroundColor: AppColors.secondary,
                             foregroundColor: Colors.white,
                             padding: const EdgeInsets.symmetric(vertical: 14),
                             shape: RoundedRectangleBorder(

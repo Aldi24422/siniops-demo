@@ -1,13 +1,17 @@
 import 'dart:async';
-import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
-import 'package:blue_thermal_printer/blue_thermal_printer.dart';
+import 'package:print_bluetooth_thermal/print_bluetooth_thermal.dart';
+import 'package:esc_pos_utils_plus/esc_pos_utils_plus.dart';
 import 'package:intl/intl.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:image/image.dart' as img;
+import 'package:permission_handler/permission_handler.dart';
 import '../models/product_model.dart';
+
+// =============================================================================
+// DATA MODELS
+// =============================================================================
 
 /// Wi-Fi settings model for receipt footer
 class WifiSettings {
@@ -37,6 +41,9 @@ class ReceiptData {
   final double totalAmount;
   final String paymentMethod;
   final DateTime timestamp;
+  final double? cashReceived;
+  final double? changeAmount;
+  final String? staffName;
 
   ReceiptData({
     this.transactionId,
@@ -44,48 +51,178 @@ class ReceiptData {
     required this.totalAmount,
     required this.paymentMethod,
     DateTime? timestamp,
+    this.cashReceived,
+    this.changeAmount,
+    this.staffName,
   }) : timestamp = timestamp ?? DateTime.now();
 }
 
+/// Permission check result
+enum PermissionResult { granted, denied, permanentlyDenied }
+
+/// Connection result with detailed status
+class ConnectionResult {
+  final bool success;
+  final String message;
+  final String? deviceName;
+
+  ConnectionResult({
+    required this.success,
+    required this.message,
+    this.deviceName,
+  });
+}
+
+/// Bluetooth device info wrapper
+class PrinterDevice {
+  final String name;
+  final String address;
+
+  PrinterDevice({required this.name, required this.address});
+
+  @override
+  String toString() => 'PrinterDevice(name: $name, address: $address)';
+}
+
+// =============================================================================
+// DANTSU-STYLE PRINTER SERVICE
+// =============================================================================
+
 /// Singleton service for Bluetooth thermal printer operations
+/// Implements Dantsu ESCPOS library logic for stable connection and printing
 class PrinterService {
   // Singleton pattern
   static final PrinterService _instance = PrinterService._internal();
   static PrinterService get instance => _instance;
   PrinterService._internal();
 
-  final BlueThermalPrinter _printer = BlueThermalPrinter.instance;
-
   // Connection state
-  BluetoothDevice? _connectedDevice;
-  BluetoothDevice? get connectedDevice => _connectedDevice;
+  PrinterDevice? _connectedDevice;
+  PrinterDevice? get connectedDevice => _connectedDevice;
   bool _isConnected = false;
   bool get isConnected => _isConnected;
 
-  // Cached logo path
-  String? _cachedLogoPath;
+  // Cached logo bytes
+  Uint8List? _cachedLogoBytes;
 
   // Store settings
   static const String _storeName = "SINI.NGOPI";
   static const String _logoAssetPath = 'assets/images/logo.png';
 
+  // Paper width for 58mm thermal printer
+  // 58mm paper = ~48mm printable area = 384 dots max
+  // Using 140 for smaller, compact logo
+  static const int _logoTargetWidth = 140;
+
   // SharedPreferences keys
   static const String _keyWifiSsid = 'receipt_wifi_ssid';
   static const String _keyWifiPass = 'receipt_wifi_password';
   static const String _keyShopAddress = 'shop_address';
+  static const String _keySavedPrinterName = 'saved_printer_name';
+  static const String _keySavedPrinterAddress = 'saved_printer_address';
 
-  // Default values (used when nothing is saved)
+  // Default values
   static const String _defaultWifiSsid = 'SiniNgopi';
   static const String _defaultWifiPass = 'kopi123';
   static const String _defaultShopAddress = 'Jl. Contoh No. 123, Surabaya';
 
-  /// Save Wi-Fi settings to SharedPreferences
+  // ===========================================================================
+  // PERMISSION HANDLING (Hybrid: Library native + permission_handler fallback)
+  // ===========================================================================
+
+  /// Check permissions using library's native check which AUTO-REQUESTS on Android 12+
+  /// This is more reliable than permission_handler for Bluetooth permissions
+  Future<PermissionResult> checkBluetoothPermissions() async {
+    try {
+      debugPrint('[PrinterService] Checking Bluetooth permissions...');
+
+      // First, use library's native permission check
+      // This will AUTO-TRIGGER permission dialog on Android 12+
+      final bool isGranted =
+          await PrintBluetoothThermal.isPermissionBluetoothGranted;
+      debugPrint('[PrinterService] Library permission check: $isGranted');
+
+      if (isGranted) {
+        debugPrint(
+          '[PrinterService] Bluetooth permissions granted (native check)',
+        );
+        return PermissionResult.granted;
+      }
+
+      // If native check fails, check with permission_handler for detailed status
+      final connectStatus = await Permission.bluetoothConnect.status;
+      final scanStatus = await Permission.bluetoothScan.status;
+
+      debugPrint(
+        '[PrinterService] permission_handler: connect=$connectStatus, scan=$scanStatus',
+      );
+
+      // Check if permanently denied
+      if (connectStatus.isPermanentlyDenied || scanStatus.isPermanentlyDenied) {
+        debugPrint('[PrinterService] Permission permanently denied');
+        return PermissionResult.permanentlyDenied;
+      }
+
+      // Try requesting with permission_handler as fallback
+      debugPrint(
+        '[PrinterService] Requesting permissions via permission_handler...',
+      );
+      final results = await [
+        Permission.bluetoothConnect,
+        Permission.bluetoothScan,
+        Permission.bluetooth, // For older Android versions
+      ].request();
+
+      debugPrint('[PrinterService] Request results: $results');
+
+      // Verify with library again after permission request
+      final bool recheckGranted =
+          await PrintBluetoothThermal.isPermissionBluetoothGranted;
+      debugPrint(
+        '[PrinterService] Library recheck after request: $recheckGranted',
+      );
+
+      if (recheckGranted) {
+        return PermissionResult.granted;
+      }
+
+      // Check if now permanently denied
+      final newConnectStatus = await Permission.bluetoothConnect.status;
+      final newScanStatus = await Permission.bluetoothScan.status;
+
+      if (newConnectStatus.isPermanentlyDenied ||
+          newScanStatus.isPermanentlyDenied) {
+        return PermissionResult.permanentlyDenied;
+      }
+
+      return PermissionResult.denied;
+    } catch (e) {
+      debugPrint('[PrinterService] Error checking permissions: $e');
+      return PermissionResult.denied;
+    }
+  }
+
+  /// Alias for backward compatibility
+  Future<PermissionResult> checkAndRequestBluetoothPermissions() async {
+    return await checkBluetoothPermissions();
+  }
+
+  /// Check if permissions are granted without requesting
+  Future<bool> hasBluetoothPermissions() async {
+    final connect = await Permission.bluetoothConnect.status;
+    final scan = await Permission.bluetoothScan.status;
+    return connect.isGranted && scan.isGranted;
+  }
+
+  // ===========================================================================
+  // SETTINGS MANAGEMENT
+  // ===========================================================================
+
   Future<bool> saveWifiSettings(String ssid, String password) async {
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_keyWifiSsid, ssid);
       await prefs.setString(_keyWifiPass, password);
-      debugPrint('[PrinterService] Wi-Fi settings saved: SSID=$ssid');
       return true;
     } catch (e) {
       debugPrint('[PrinterService] Error saving Wi-Fi settings: $e');
@@ -93,134 +230,229 @@ class PrinterService {
     }
   }
 
-  /// Get Wi-Fi settings from SharedPreferences
   Future<WifiSettings> getWifiSettings() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final ssid = prefs.getString(_keyWifiSsid) ?? _defaultWifiSsid;
-      final password = prefs.getString(_keyWifiPass) ?? _defaultWifiPass;
-      return WifiSettings(ssid: ssid, password: password);
+      return WifiSettings(
+        ssid: prefs.getString(_keyWifiSsid) ?? _defaultWifiSsid,
+        password: prefs.getString(_keyWifiPass) ?? _defaultWifiPass,
+      );
     } catch (e) {
-      debugPrint('[PrinterService] Error getting Wi-Fi settings: $e');
       return WifiSettings(ssid: _defaultWifiSsid, password: _defaultWifiPass);
     }
   }
 
-  /// Save shop address to SharedPreferences
   Future<bool> saveShopAddress(String address) async {
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_keyShopAddress, address);
-      debugPrint('[PrinterService] Shop address saved: $address');
       return true;
     } catch (e) {
-      debugPrint('[PrinterService] Error saving shop address: $e');
       return false;
     }
   }
 
-  /// Get shop address from SharedPreferences
   Future<StoreSettings> getStoreSettings() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final address = prefs.getString(_keyShopAddress) ?? _defaultShopAddress;
-      return StoreSettings(address: address);
+      return StoreSettings(
+        address: prefs.getString(_keyShopAddress) ?? _defaultShopAddress,
+      );
     } catch (e) {
-      debugPrint('[PrinterService] Error getting store settings: $e');
       return StoreSettings(address: _defaultShopAddress);
     }
   }
 
-  /// Format transaction ID for display
-  /// Format: TRX-ddMM-XXXX (last 4 chars of original ID)
+  Future<void> _saveLastPrinter(PrinterDevice device) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_keySavedPrinterName, device.name);
+      await prefs.setString(_keySavedPrinterAddress, device.address);
+    } catch (e) {
+      debugPrint('[PrinterService] Error saving last printer: $e');
+    }
+  }
+
+  Future<PrinterDevice?> getLastPrinter() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final name = prefs.getString(_keySavedPrinterName);
+      final address = prefs.getString(_keySavedPrinterAddress);
+      if (name != null && address != null) {
+        return PrinterDevice(name: name, address: address);
+      }
+      return null;
+    } catch (e) {
+      return null;
+    }
+  }
+
   String formatTransactionId(String? originalId, DateTime timestamp) {
     if (originalId == null || originalId.isEmpty) {
       return 'TRX-${DateFormat('ddMM').format(timestamp)}-0000';
     }
-
     final datePrefix = DateFormat('ddMM').format(timestamp);
     final suffix = originalId.length >= 4
         ? originalId.substring(originalId.length - 4).toUpperCase()
         : originalId.toUpperCase().padLeft(4, '0');
-
     return 'TRX-$datePrefix-$suffix';
   }
 
-  /// Scan for available Bluetooth devices
-  Future<List<BluetoothDevice>> scanDevices() async {
-    try {
-      final devices = await _printer.getBondedDevices();
-      debugPrint('[PrinterService] Found ${devices.length} bonded devices');
-      return devices;
-    } catch (e) {
-      debugPrint('[PrinterService] Error scanning devices: $e');
-      return [];
-    }
-  }
+  // ===========================================================================
+  // BLUETOOTH OPERATIONS (Dantsu-style)
+  // ===========================================================================
 
-  /// Check if Bluetooth is available and enabled
+  /// Check if Bluetooth is enabled
   Future<bool> isBluetoothAvailable() async {
     try {
-      return await _printer.isAvailable ?? false;
+      return await PrintBluetoothThermal.bluetoothEnabled;
     } catch (e) {
       debugPrint('[PrinterService] Error checking Bluetooth: $e');
       return false;
     }
   }
 
-  /// Check if Bluetooth is turned on
-  Future<bool> isBluetoothOn() async {
-    try {
-      return await _printer.isOn ?? false;
-    } catch (e) {
-      return false;
-    }
-  }
+  Future<bool> isBluetoothOn() async => await isBluetoothAvailable();
 
-  /// Connect to a Bluetooth device
-  Future<bool> connect(BluetoothDevice device) async {
+  /// Scan for paired Bluetooth devices
+  /// Must call checkBluetoothPermissions() first!
+  Future<List<PrinterDevice>> scanDevices() async {
     try {
-      // Disconnect from current device first
-      if (_isConnected) {
-        await disconnect();
+      debugPrint('[PrinterService] Starting device scan...');
+
+      // Verify Bluetooth is enabled
+      final btEnabled = await PrintBluetoothThermal.bluetoothEnabled;
+      debugPrint('[PrinterService] Bluetooth enabled: $btEnabled');
+
+      if (!btEnabled) {
+        debugPrint('[PrinterService] Bluetooth is OFF');
+        return [];
       }
 
-      await _printer.connect(device);
-      _connectedDevice = device;
-      _isConnected = true;
-      debugPrint('[PrinterService] Connected to ${device.name}');
+      // Get paired devices
+      final List<BluetoothInfo> devices =
+          await PrintBluetoothThermal.pairedBluetooths;
+      debugPrint('[PrinterService] Found ${devices.length} paired devices');
 
-      // Pre-cache logo for faster printing
-      await _prepareLogo();
+      // Log each device
+      for (var d in devices) {
+        debugPrint('[PrinterService]   - ${d.name}: ${d.macAdress}');
+      }
 
-      return true;
+      return devices
+          .where((d) => d.macAdress.isNotEmpty)
+          .map(
+            (d) => PrinterDevice(
+              name: d.name.isEmpty ? 'Unknown Device' : d.name,
+              address: d.macAdress,
+            ),
+          )
+          .toList();
     } catch (e) {
-      debugPrint('[PrinterService] Error connecting: $e');
+      debugPrint('[PrinterService] Error scanning: $e');
+      return [];
+    }
+  }
+
+  /// Connect to a Bluetooth printer
+  Future<ConnectionResult> connect(PrinterDevice device) async {
+    try {
+      debugPrint(
+        '[PrinterService] Connecting to ${device.name} (${device.address})...',
+      );
+
+      // Disconnect first if already connected
+      if (_isConnected) {
+        await disconnect();
+        await Future.delayed(const Duration(milliseconds: 300));
+      }
+
+      // Connect using library
+      final bool result = await PrintBluetoothThermal.connect(
+        macPrinterAddress: device.address,
+      );
+
+      debugPrint('[PrinterService] Connection result: $result');
+
+      if (result) {
+        _connectedDevice = device;
+        _isConnected = true;
+        await _saveLastPrinter(device);
+
+        // Pre-cache logo
+        await _prepareLogo();
+
+        return ConnectionResult(
+          success: true,
+          message: 'Terhubung ke ${device.name}',
+          deviceName: device.name,
+        );
+      } else {
+        return ConnectionResult(
+          success: false,
+          message:
+              'Gagal terhubung. Pastikan printer menyala dan dalam jangkauan.',
+        );
+      }
+    } catch (e) {
+      debugPrint('[PrinterService] Connection error: $e');
       _isConnected = false;
       _connectedDevice = null;
+      return ConnectionResult(success: false, message: 'Error: $e');
+    }
+  }
+
+  /// Connect with retry mechanism
+  Future<ConnectionResult> connectWithRetry(
+    PrinterDevice device, {
+    int maxRetries = 3,
+  }) async {
+    for (int attempt = 1; attempt <= maxRetries; attempt++) {
+      debugPrint('[PrinterService] Connection attempt $attempt/$maxRetries');
+      final result = await connect(device);
+      if (result.success) return result;
+      if (attempt < maxRetries) {
+        await Future.delayed(Duration(milliseconds: 500 * attempt));
+      }
+    }
+    return ConnectionResult(
+      success: false,
+      message: 'Gagal terhubung setelah $maxRetries percobaan.',
+    );
+  }
+
+  /// Auto-reconnect to last saved printer
+  Future<bool> autoReconnect() async {
+    try {
+      if (await checkConnection()) return true;
+
+      final lastPrinter = await getLastPrinter();
+      if (lastPrinter == null) return false;
+
+      final result = await connect(lastPrinter);
+      return result.success;
+    } catch (e) {
       return false;
     }
   }
 
-  /// Disconnect from current device
+  /// Disconnect from printer
   Future<void> disconnect() async {
     try {
-      await _printer.disconnect();
+      await PrintBluetoothThermal.disconnect;
       _connectedDevice = null;
       _isConnected = false;
       debugPrint('[PrinterService] Disconnected');
     } catch (e) {
-      debugPrint('[PrinterService] Error disconnecting: $e');
+      debugPrint('[PrinterService] Disconnect error: $e');
     }
   }
 
   /// Check current connection status
   Future<bool> checkConnection() async {
     try {
-      _isConnected = await _printer.isConnected ?? false;
-      if (!_isConnected) {
-        _connectedDevice = null;
-      }
+      _isConnected = await PrintBluetoothThermal.connectionStatus;
+      if (!_isConnected) _connectedDevice = null;
       return _isConnected;
     } catch (e) {
       _isConnected = false;
@@ -228,72 +460,163 @@ class PrinterService {
     }
   }
 
-  /// Prepare logo by copying asset to temp file and processing for thermal printer
-  /// Resizes to 380px width and converts to grayscale for better print quality
-  Future<void> _prepareLogo() async {
-    try {
-      if (_cachedLogoPath != null) {
-        final file = File(_cachedLogoPath!);
-        if (await file.exists()) {
-          debugPrint('[PrinterService] Using cached logo: $_cachedLogoPath');
-          return;
+  // ===========================================================================
+  // DANTSU-STYLE IMAGE PROCESSING
+  // ===========================================================================
+
+  /// Initialize GS v 0 command header (from EscPosPrinterCommands.java)
+  static Uint8List _initGSv0Command(int bytesByLine, int bitmapHeight) {
+    final xH = bytesByLine ~/ 256;
+    final xL = bytesByLine - (xH * 256);
+    final yH = bitmapHeight ~/ 256;
+    final yL = bitmapHeight - (yH * 256);
+
+    final imageBytes = Uint8List(8 + bytesByLine * bitmapHeight);
+    imageBytes[0] = 0x1D; // GS
+    imageBytes[1] = 0x76; // v
+    imageBytes[2] = 0x30; // 0
+    imageBytes[3] = 0x00; // m = 0 (normal mode)
+    imageBytes[4] = xL; // xL
+    imageBytes[5] = xH; // xH
+    imageBytes[6] = yL; // yL
+    imageBytes[7] = yH; // yH
+
+    return imageBytes;
+  }
+
+  /// Convert bitmap to ESC/POS bytes using Dantsu's algorithm
+  /// This is a direct port of EscPosPrinterCommands.bitmapToBytes()
+  static Uint8List _bitmapToBytes(img.Image bitmap, {bool gradient = true}) {
+    final bitmapWidth = bitmap.width;
+    final bitmapHeight = bitmap.height;
+    final bytesByLine = (bitmapWidth / 8).ceil();
+
+    final imageBytes = _initGSv0Command(bytesByLine, bitmapHeight);
+
+    int i = 8;
+    int greyscaleCoefficientInit = 0;
+    const gradientStep = 6;
+    final colorLevelStep = 765.0 / (15 * gradientStep + gradientStep - 1);
+
+    for (int posY = 0; posY < bitmapHeight; posY++) {
+      int greyscaleCoefficient = greyscaleCoefficientInit;
+      final greyscaleLine = posY % gradientStep;
+
+      for (int j = 0; j < bitmapWidth; j += 8) {
+        int b = 0;
+
+        for (int k = 0; k < 8; k++) {
+          final posX = j + k;
+
+          if (posX < bitmapWidth) {
+            final pixel = bitmap.getPixel(posX, posY);
+            final red = pixel.r.toInt();
+            final green = pixel.g.toInt();
+            final blue = pixel.b.toInt();
+
+            final colorSum = red + green + blue;
+            final threshold =
+                (greyscaleCoefficient * gradientStep + greyscaleLine) *
+                colorLevelStep;
+
+            bool isBlack;
+            if (gradient) {
+              isBlack = colorSum < threshold;
+            } else {
+              isBlack = red < 160 || green < 160 || blue < 160;
+            }
+
+            if (isBlack) {
+              b |= 1 << (7 - k);
+            }
+
+            greyscaleCoefficient += 5;
+            if (greyscaleCoefficient > 15) {
+              greyscaleCoefficient -= 16;
+            }
+          }
         }
+
+        imageBytes[i++] = b;
       }
 
-      // Load asset as bytes
+      greyscaleCoefficientInit += 2;
+      if (greyscaleCoefficientInit > 15) {
+        greyscaleCoefficientInit = 0;
+      }
+    }
+
+    return imageBytes;
+  }
+
+  /// Prepare logo: load, resize, and convert to ESC/POS bytes
+  Future<void> _prepareLogo() async {
+    try {
+      // Check if already cached
+      if (_cachedLogoBytes != null && _cachedLogoBytes!.isNotEmpty) return;
+
+      debugPrint('[PrinterService] Preparing logo...');
+
+      // Load logo from assets
       final ByteData data = await rootBundle.load(_logoAssetPath);
       final Uint8List bytes = data.buffer.asUint8List();
 
-      // Process image: resize and convert to grayscale
-      final processedBytes = await _processLogoImage(bytes);
+      // Process in isolate
+      _cachedLogoBytes = await compute(_processLogoIsolate, bytes);
 
-      // Write to temp directory
-      final tempDir = await getTemporaryDirectory();
-      final logoFile = File('${tempDir.path}/receipt_logo_processed.png');
-      await logoFile.writeAsBytes(processedBytes);
-
-      _cachedLogoPath = logoFile.path;
       debugPrint(
-        '[PrinterService] Logo processed and cached at: $_cachedLogoPath',
+        '[PrinterService] Logo prepared: ${_cachedLogoBytes!.length} bytes',
       );
     } catch (e) {
       debugPrint('[PrinterService] Error preparing logo: $e');
-      _cachedLogoPath = null;
+      _cachedLogoBytes = null;
     }
   }
 
-  /// Process logo image: resize to 380px width and convert to grayscale
-  Future<Uint8List> _processLogoImage(Uint8List bytes) async {
-    return await compute(_processImageIsolate, bytes);
-  }
+  /// Isolate function for logo processing
+  static Uint8List _processLogoIsolate(Uint8List bytes) {
+    // Decode image
+    final original = img.decodeImage(bytes);
+    if (original == null) return Uint8List(0);
 
-  /// Isolate function to process image without blocking UI
-  static Uint8List _processImageIsolate(Uint8List bytes) {
-    // Decode the image
-    final img.Image? original = img.decodeImage(bytes);
-    if (original == null) {
-      return bytes; // Return original if decode fails
-    }
-
-    // Resize to 380px width (optimal for 58mm thermal printer)
-    const int targetWidth = 380;
-    final int targetHeight = (original.height * targetWidth / original.width)
+    // Calculate new height maintaining aspect ratio
+    final targetHeight = (original.height * _logoTargetWidth / original.width)
         .round();
-    final img.Image resized = img.copyResize(
+
+    // Resize image
+    final resized = img.copyResize(
       original,
-      width: targetWidth,
+      width: _logoTargetWidth,
       height: targetHeight,
       interpolation: img.Interpolation.linear,
     );
 
-    // Convert to grayscale for better thermal print quality
-    final img.Image grayscale = img.grayscale(resized);
+    // Create a new image with WHITE background
+    // This handles transparent PNGs correctly
+    final withBackground = img.Image(
+      width: resized.width,
+      height: resized.height,
+    );
 
-    // Encode back to PNG
-    return Uint8List.fromList(img.encodePng(grayscale));
+    // Fill with white
+    img.fill(withBackground, color: img.ColorRgb8(255, 255, 255));
+
+    // Composite the logo on top of white background
+    img.compositeImage(withBackground, resized);
+
+    // Convert to grayscale
+    final grayscale = img.grayscale(withBackground);
+
+    // Convert to ESC/POS bytes using Dantsu algorithm
+    // gradient: true = better quality with dithering
+    // The algorithm treats DARK pixels as "print" (black dots)
+    return _bitmapToBytes(grayscale, gradient: true);
   }
 
-  /// Format currency to Rupiah string
+  // ===========================================================================
+  // RECEIPT GENERATION
+  // ===========================================================================
+
   String _formatRupiah(double value) {
     return NumberFormat.currency(
       locale: 'id_ID',
@@ -302,117 +625,179 @@ class PrinterService {
     ).format(value);
   }
 
-  /// Print a transaction receipt with logo, dynamic address and Wi-Fi footer
-  /// Returns true if print was successful
-  Future<bool> printReceipt(ReceiptData receipt) async {
+  /// Generate complete receipt bytes
+  Future<List<int>> _generateReceiptBytes(ReceiptData receipt) async {
     try {
-      // Check connection
-      if (!await checkConnection()) {
-        debugPrint('[PrinterService] Printer not connected');
-        return false;
-      }
+      final profile = await CapabilityProfile.load();
+      final generator = Generator(PaperSize.mm58, profile);
 
-      // Get dynamic settings from SharedPreferences
+      List<int> bytes = [];
+
       final wifiSettings = await getWifiSettings();
       final storeSettings = await getStoreSettings();
-
       final dateFormat = DateFormat('dd MMM yyyy HH:mm', 'id_ID');
 
-      // --- LOGO ---
-      _printer.printNewLine();
-      if (_cachedLogoPath != null) {
-        try {
-          // Print logo image centered
-          _printer.printImage(_cachedLogoPath!);
-          _printer.printNewLine();
-          debugPrint('[PrinterService] Logo printed');
-        } catch (e) {
-          debugPrint('[PrinterService] Logo print failed: $e');
-          // Continue without logo
-        }
+      // --- LOGO (Dantsu-style raw bytes) ---
+      if (_cachedLogoBytes != null && _cachedLogoBytes!.isNotEmpty) {
+        // ESC a 1 = Center alignment (0x1B, 0x61, 0x01)
+        bytes.addAll([0x1B, 0x61, 0x01]);
+        bytes.addAll(_cachedLogoBytes!);
+        // Reset to left alignment after logo
+        bytes.addAll([0x1B, 0x61, 0x00]);
       }
 
       // --- HEADER ---
-      _printer.printCustom(_storeName, 3, 1); // Size 3, Center
-      _printer.printCustom(storeSettings.address, 1, 1); // Dynamic address
-      _printer.printCustom(dateFormat.format(receipt.timestamp), 1, 1);
+      // Store name - normal size, bold, centered
+      bytes += generator.text(
+        _storeName,
+        styles: const PosStyles(align: PosAlign.center, bold: true),
+      );
+      bytes += generator.text(
+        storeSettings.address,
+        styles: const PosStyles(align: PosAlign.center),
+      );
+      bytes += generator.text(
+        dateFormat.format(receipt.timestamp),
+        styles: const PosStyles(align: PosAlign.center),
+      );
 
-      // Transaction ID (formatted)
       if (receipt.transactionId != null) {
         final formattedId = formatTransactionId(
           receipt.transactionId,
           receipt.timestamp,
         );
-        _printer.printCustom('#$formattedId', 0, 1);
+        bytes += generator.text(
+          '#$formattedId',
+          styles: const PosStyles(align: PosAlign.center),
+        );
       }
-      _printer.printNewLine();
 
-      // --- SEPARATOR ---
-      _printer.printCustom("--------------------------------", 1, 1);
+      if (receipt.staffName != null) {
+        bytes += generator.text(
+          'Kasir: ${receipt.staffName}',
+          styles: const PosStyles(align: PosAlign.left),
+        );
+      }
+
+      bytes += generator.hr(ch: '-');
 
       // --- ITEMS ---
       for (final item in receipt.items) {
         final qty = item.qty > 0 ? item.qty : 1;
         final subtotal = item.price * qty;
 
-        // Product name
-        _printer.printCustom(item.name, 1, 0); // Left align
-        // Qty x Price = Subtotal
-        _printer.printLeftRight(
-          "$qty x ${_formatRupiah(item.price)}",
-          _formatRupiah(subtotal),
-          1,
-        );
+        bytes += generator.text(item.name);
+        bytes += generator.row([
+          PosColumn(text: '$qty x ${_formatRupiah(item.price)}', width: 7),
+          PosColumn(
+            text: _formatRupiah(subtotal),
+            width: 5,
+            styles: const PosStyles(align: PosAlign.right),
+          ),
+        ]);
       }
 
-      // --- SEPARATOR ---
-      _printer.printCustom("--------------------------------", 1, 1);
+      bytes += generator.hr(ch: '-');
 
       // --- TOTAL ---
-      _printer.printLeftRight(
-        "TOTAL",
-        "Rp ${_formatRupiah(receipt.totalAmount)}",
-        2, // Bold
-      );
+      bytes += generator.row([
+        PosColumn(text: 'TOTAL', width: 6, styles: const PosStyles(bold: true)),
+        PosColumn(
+          text: 'Rp ${_formatRupiah(receipt.totalAmount)}',
+          width: 6,
+          styles: const PosStyles(align: PosAlign.right, bold: true),
+        ),
+      ]);
 
-      // --- PAYMENT METHOD ---
+      // --- PAYMENT DETAILS ---
+      if (receipt.paymentMethod.toLowerCase() == 'cash' &&
+          receipt.cashReceived != null) {
+        bytes += generator.row([
+          PosColumn(text: 'Tunai', width: 6),
+          PosColumn(
+            text: 'Rp ${_formatRupiah(receipt.cashReceived!)}',
+            width: 6,
+            styles: const PosStyles(align: PosAlign.right),
+          ),
+        ]);
+        bytes += generator.row([
+          PosColumn(text: 'Kembali', width: 6),
+          PosColumn(
+            text: 'Rp ${_formatRupiah(receipt.changeAmount ?? 0)}',
+            width: 6,
+            styles: const PosStyles(align: PosAlign.right),
+          ),
+        ]);
+      }
+
       final paymentDisplay = receipt.paymentMethod.toUpperCase() == 'QRIS'
           ? 'QRIS'
           : receipt.paymentMethod.toUpperCase();
-      _printer.printCustom("Bayar: $paymentDisplay", 1, 0);
+      bytes += generator.text('Bayar: $paymentDisplay');
 
-      // --- SEPARATOR ---
-      _printer.printCustom("--------------------------------", 1, 1);
+      bytes += generator.hr(ch: '-');
 
-      // --- FOOTER (Dynamic Wi-Fi) ---
-      _printer.printNewLine();
-      _printer.printCustom("Terima Kasih!", 2, 1); // Bold, Center
+      // --- FOOTER ---
+      bytes += generator.text(
+        'Terima Kasih!',
+        styles: const PosStyles(align: PosAlign.center, bold: true),
+      );
 
-      // Print Wi-Fi info if available
       if (wifiSettings.isNotEmpty) {
-        _printer.printCustom("Wi-Fi: ${wifiSettings.ssid}", 1, 1);
-        _printer.printCustom("Pass: ${wifiSettings.password}", 1, 1);
+        bytes += generator.text(
+          'Wi-Fi: ${wifiSettings.ssid}',
+          styles: const PosStyles(align: PosAlign.center),
+        );
+        bytes += generator.text(
+          'Pass: ${wifiSettings.password}',
+          styles: const PosStyles(align: PosAlign.center),
+        );
       }
 
-      // Feed and cut
-      _printer.printNewLine();
-      _printer.printNewLine();
-      _printer.printNewLine();
-      _printer.paperCut();
+      // Direct cut, no extra spacing
+      bytes += generator.cut();
+
+      return bytes;
+    } catch (e) {
+      debugPrint('[PrinterService] Error generating receipt: $e');
+      return [];
+    }
+  }
+
+  // ===========================================================================
+  // PRINTING OPERATIONS
+  // ===========================================================================
+
+  /// Print a receipt
+  Future<bool> printReceipt(ReceiptData receipt) async {
+    try {
+      if (!await checkConnection()) {
+        debugPrint('[PrinterService] Not connected');
+        return false;
+      }
+
+      final bytes = await _generateReceiptBytes(receipt);
+      if (bytes.isEmpty) {
+        debugPrint('[PrinterService] Empty receipt bytes');
+        return false;
+      }
 
       debugPrint(
-        '[PrinterService] Receipt printed successfully with dynamic footer',
+        '[PrinterService] Sending ${bytes.length} bytes to printer...',
       );
-      return true;
+
+      // IMPORTANT: writeBytes expects List<int>, not Uint8List
+      final result = await PrintBluetoothThermal.writeBytes(bytes);
+      debugPrint('[PrinterService] Print result: $result');
+      return result;
     } catch (e) {
-      debugPrint('[PrinterService] Error printing receipt: $e');
+      debugPrint('[PrinterService] Print error: $e');
       return false;
     }
   }
 
-  /// Print a test receipt with dynamic settings
+  /// Print a test receipt
   Future<bool> printTestReceipt() async {
-    // Ensure logo is prepared
     await _prepareLogo();
 
     final testReceipt = ReceiptData(
@@ -421,7 +806,7 @@ class PrinterService {
         Product(
           id: 'test1',
           name: 'Es Kopi Susu',
-          description: 'Test',
+          description: '',
           price: 18000,
           category: 'Minuman',
           qty: 2,
@@ -429,7 +814,7 @@ class PrinterService {
         Product(
           id: 'test2',
           name: 'Roti Bakar',
-          description: 'Test',
+          description: '',
           price: 15000,
           category: 'Makanan',
           qty: 1,
@@ -437,19 +822,24 @@ class PrinterService {
       ],
       totalAmount: 51000,
       paymentMethod: 'cash',
+      cashReceived: 100000,
+      changeAmount: 49000,
+      staffName: 'Test Staff',
     );
 
     return await printReceipt(testReceipt);
   }
 
-  /// Print transaction from TransactionResult data
+  /// Print transaction
   Future<bool> printTransaction({
     required List<Product> items,
     required double totalAmount,
     required String paymentMethod,
     String? transactionId,
+    double? cashReceived,
+    double? changeAmount,
+    String? staffName,
   }) async {
-    // Ensure logo is prepared
     await _prepareLogo();
 
     final receipt = ReceiptData(
@@ -457,8 +847,47 @@ class PrinterService {
       items: items,
       totalAmount: totalAmount,
       paymentMethod: paymentMethod,
+      cashReceived: cashReceived,
+      changeAmount: changeAmount,
+      staffName: staffName,
     );
 
     return await printReceipt(receipt);
+  }
+
+  // ===========================================================================
+  // DIAGNOSTICS
+  // ===========================================================================
+
+  /// Run diagnostic and return status
+  Future<Map<String, dynamic>> runDiagnostic() async {
+    final result = <String, dynamic>{};
+
+    try {
+      result['bluetoothEnabled'] = await PrintBluetoothThermal.bluetoothEnabled;
+      result['permissionConnect'] = (await Permission.bluetoothConnect.status)
+          .toString();
+      result['permissionScan'] = (await Permission.bluetoothScan.status)
+          .toString();
+
+      final devices = await PrintBluetoothThermal.pairedBluetooths;
+      result['pairedDevicesCount'] = devices.length;
+      result['pairedDevices'] = devices
+          .map((d) => '${d.name} (${d.macAdress})')
+          .toList();
+
+      result['isConnected'] = await PrintBluetoothThermal.connectionStatus;
+
+      final savedPrinter = await getLastPrinter();
+      result['savedPrinter'] = savedPrinter?.toString();
+
+      result['success'] = true;
+    } catch (e) {
+      result['success'] = false;
+      result['error'] = e.toString();
+    }
+
+    debugPrint('[PrinterService] Diagnostic: $result');
+    return result;
   }
 }

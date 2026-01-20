@@ -8,13 +8,17 @@ class TransactionResult {
   final String? transactionId;
   final String message;
   final List<String> errors;
+  final List<String> warnings; // Low stock warnings (non-blocking)
 
   TransactionResult({
     required this.success,
     this.transactionId,
     required this.message,
     this.errors = const [],
+    this.warnings = const [],
   });
+
+  bool get hasWarnings => warnings.isNotEmpty;
 }
 
 /// Exception thrown when stock is insufficient
@@ -79,15 +83,20 @@ class TransactionController {
     required List<Product> cartItems,
     required double totalAmount,
     String? paymentMethod,
-    String? cashierUid,
+    String? staffUid,
+    double? cashReceived,
+    double? changeAmount,
   }) async {
     if (cartItems.isEmpty) {
       return TransactionResult(success: false, message: 'Keranjang kosong');
     }
 
     try {
+      // Collect warnings outside transaction
+      List<String> lowStockWarnings = [];
+
       // Run as Firestore transaction for atomicity
-      final transactionId = await _firestore.runTransaction<String>((
+      final txnResult = await _firestore.runTransaction<Map<String, dynamic>>((
         transaction,
       ) async {
         // Step 1: Calculate total ingredient requirements
@@ -105,7 +114,9 @@ class TransactionController {
           }
         }
 
-        // Step 2: Validate stock availability
+        // Step 2: Check stock availability (WARNING ONLY - don't block transaction)
+        final List<String> warnings = [];
+
         for (final entry in ingredientRequirements.entries) {
           final ingredientId = entry.key;
           final requiredAmount = entry.value;
@@ -118,24 +129,26 @@ class TransactionController {
           }
 
           final data = snapshot.data() as Map<String, dynamic>;
-          // Use stockInBaseUnit field
           final currentStock =
               (data['stockInBaseUnit'] ?? data['currentStock'] ?? 0).toDouble();
           final ingredientName = data['name'] ?? 'Unknown';
           final baseUnit = data['baseUnit'] ?? 'gram';
           ingredientNames[ingredientId] = ingredientName;
 
+          // Check if stock is low - add warning but DON'T block
           if (currentStock < requiredAmount) {
-            throw InsufficientStockException(
+            final warning = InsufficientStockException(
               ingredientName: ingredientName,
               required: requiredAmount,
               available: currentStock,
               baseUnit: baseUnit,
             );
+            warnings.add(warning.toString());
+            debugPrint('[TransactionController] LOW STOCK WARNING: $warning');
           }
         }
 
-        // Step 3: Deduct stock
+        // Step 3: Deduct stock (even if negative - owner should update)
         for (final entry in ingredientRequirements.entries) {
           final ingredientId = entry.key;
           final deductAmount = entry.value;
@@ -165,7 +178,14 @@ class TransactionController {
               .toList(),
           'totalAmount': totalAmount,
           'paymentMethod': paymentMethod ?? 'cash',
-          'cashierUid': cashierUid,
+          'staffUid': staffUid,
+          // Payment details for cash transactions
+          'paymentDetails': cashReceived != null
+              ? {
+                  'cashReceived': cashReceived,
+                  'changeAmount': changeAmount ?? 0,
+                }
+              : null,
           'ingredientsUsed': ingredientRequirements.entries
               .map(
                 (e) => {
@@ -177,29 +197,36 @@ class TransactionController {
               .toList(),
           'createdAt': FieldValue.serverTimestamp(),
           'status': 'completed',
+          'hasLowStockWarning': warnings.isNotEmpty,
         };
 
         final newTransactionRef = _transactionsCollection.doc();
         transaction.set(newTransactionRef, transactionData);
 
-        return newTransactionRef.id;
+        return {'id': newTransactionRef.id, 'warnings': warnings};
       });
+
+      final transactionId = txnResult['id'] as String;
+      lowStockWarnings = List<String>.from(txnResult['warnings'] as List);
 
       debugPrint(
         '[TransactionController] Transaction completed: $transactionId',
       );
 
+      // Return success with warnings if any
+      if (lowStockWarnings.isNotEmpty) {
+        return TransactionResult(
+          success: true,
+          transactionId: transactionId,
+          message: 'Transaksi berhasil! Perhatian: Stok bahan rendah.',
+          warnings: lowStockWarnings,
+        );
+      }
+
       return TransactionResult(
         success: true,
         transactionId: transactionId,
         message: 'Transaksi berhasil',
-      );
-    } on InsufficientStockException catch (e) {
-      debugPrint('[TransactionController] Insufficient stock: $e');
-      return TransactionResult(
-        success: false,
-        message: e.toString(),
-        errors: [e.toString()],
       );
     } catch (e) {
       debugPrint('[TransactionController] Transaction failed: $e');
@@ -275,6 +302,36 @@ class TransactionController {
         .where(
           'createdAt',
           isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay),
+        )
+        .snapshots()
+        .map((snapshot) {
+          double total = 0;
+          for (final doc in snapshot.docs) {
+            final data = doc.data() as Map<String, dynamic>;
+            total += (data['totalAmount'] ?? 0).toDouble();
+          }
+          return total;
+        });
+  }
+
+  /// Stream for yesterday's revenue (for comparison)
+  Stream<double> getYesterdayRevenueStream() {
+    final now = DateTime.now();
+    final startOfYesterday = DateTime(now.year, now.month, now.day - 1);
+    final endOfYesterday = DateTime(
+      now.year,
+      now.month,
+      now.day,
+    ).subtract(const Duration(milliseconds: 1));
+
+    return _transactionsCollection
+        .where(
+          'createdAt',
+          isGreaterThanOrEqualTo: Timestamp.fromDate(startOfYesterday),
+        )
+        .where(
+          'createdAt',
+          isLessThanOrEqualTo: Timestamp.fromDate(endOfYesterday),
         )
         .snapshots()
         .map((snapshot) {
@@ -419,5 +476,331 @@ class TransactionController {
           ? totalRevenue / totalTransactions
           : 0.0,
     };
+  }
+
+  /// Get this week's revenue data for chart (current week Mon-Sun)
+  Future<Map<String, double>> getThisWeekRevenue() async {
+    final now = DateTime.now();
+    // Find Monday of current week
+    final monday = now.subtract(Duration(days: now.weekday - 1));
+    final startOfWeek = DateTime(monday.year, monday.month, monday.day);
+
+    final snapshot = await _transactionsCollection
+        .where(
+          'createdAt',
+          isGreaterThanOrEqualTo: Timestamp.fromDate(startOfWeek),
+        )
+        .orderBy('createdAt')
+        .get();
+
+    // Initialize all 7 days with 0
+    final Map<String, double> dailyRevenue = {};
+    final dayNames = ['Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab', 'Min'];
+
+    for (int i = 0; i < 7; i++) {
+      final date = startOfWeek.add(Duration(days: i));
+      final key = '${dayNames[i]} ${date.day}';
+      dailyRevenue[key] = 0;
+    }
+
+    // Aggregate revenue per day
+    for (final doc in snapshot.docs) {
+      final data = doc.data() as Map<String, dynamic>;
+      final timestamp = data['createdAt'] as Timestamp?;
+      if (timestamp == null) continue;
+
+      final date = timestamp.toDate();
+      final dayIndex = (date.weekday - 1) % 7;
+      final key = '${dayNames[dayIndex]} ${date.day}';
+
+      final amount = (data['totalAmount'] ?? 0).toDouble();
+      dailyRevenue[key] = (dailyRevenue[key] ?? 0) + amount;
+    }
+
+    return dailyRevenue;
+  }
+
+  /// Get week period information
+  Map<String, DateTime> getThisWeekPeriod() {
+    final now = DateTime.now();
+    final monday = now.subtract(Duration(days: now.weekday - 1));
+    final sunday = monday.add(const Duration(days: 6));
+    return {
+      'start': DateTime(monday.year, monday.month, monday.day),
+      'end': DateTime(sunday.year, sunday.month, sunday.day, 23, 59, 59),
+    };
+  }
+
+  /// Get this month's revenue data for chart (per day)
+  Future<Map<String, double>> getThisMonthRevenue() async {
+    final now = DateTime.now();
+    final startOfMonth = DateTime(now.year, now.month, 1);
+
+    final snapshot = await _transactionsCollection
+        .where(
+          'createdAt',
+          isGreaterThanOrEqualTo: Timestamp.fromDate(startOfMonth),
+        )
+        .orderBy('createdAt')
+        .get();
+
+    // Initialize days in month
+    final Map<String, double> dailyRevenue = {};
+    final daysInMonth = DateTime(now.year, now.month + 1, 0).day;
+
+    for (int i = 1; i <= daysInMonth; i++) {
+      dailyRevenue['$i'] = 0;
+    }
+
+    // Aggregate revenue per day
+    for (final doc in snapshot.docs) {
+      final data = doc.data() as Map<String, dynamic>;
+      final timestamp = data['createdAt'] as Timestamp?;
+      if (timestamp == null) continue;
+
+      final date = timestamp.toDate();
+      final key = '${date.day}';
+
+      final amount = (data['totalAmount'] ?? 0).toDouble();
+      dailyRevenue[key] = (dailyRevenue[key] ?? 0) + amount;
+    }
+
+    return dailyRevenue;
+  }
+
+  /// Get month period information
+  Map<String, DateTime> getThisMonthPeriod() {
+    final now = DateTime.now();
+    final startOfMonth = DateTime(now.year, now.month, 1);
+    final endOfMonth = DateTime(now.year, now.month + 1, 0, 23, 59, 59);
+    return {'start': startOfMonth, 'end': endOfMonth};
+  }
+
+  /// Get this year's revenue data for chart (per month)
+  Future<Map<String, double>> getThisYearRevenue() async {
+    final now = DateTime.now();
+    final startOfYear = DateTime(now.year, 1, 1);
+
+    final snapshot = await _transactionsCollection
+        .where(
+          'createdAt',
+          isGreaterThanOrEqualTo: Timestamp.fromDate(startOfYear),
+        )
+        .orderBy('createdAt')
+        .get();
+
+    // Initialize all 12 months
+    final Map<String, double> monthlyRevenue = {};
+    final monthNames = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'Mei',
+      'Jun',
+      'Jul',
+      'Agt',
+      'Sep',
+      'Okt',
+      'Nov',
+      'Des',
+    ];
+
+    for (int i = 0; i < 12; i++) {
+      monthlyRevenue[monthNames[i]] = 0;
+    }
+
+    // Aggregate revenue per month
+    for (final doc in snapshot.docs) {
+      final data = doc.data() as Map<String, dynamic>;
+      final timestamp = data['createdAt'] as Timestamp?;
+      if (timestamp == null) continue;
+
+      final date = timestamp.toDate();
+      final key = monthNames[date.month - 1];
+
+      final amount = (data['totalAmount'] ?? 0).toDouble();
+      monthlyRevenue[key] = (monthlyRevenue[key] ?? 0) + amount;
+    }
+
+    return monthlyRevenue;
+  }
+
+  /// Get year period information
+  Map<String, DateTime> getThisYearPeriod() {
+    final now = DateTime.now();
+    return {
+      'start': DateTime(now.year, 1, 1),
+      'end': DateTime(now.year, 12, 31, 23, 59, 59),
+    };
+  }
+
+  /// Get revenue data for a custom date range (per-day or per-week breakdown)
+  /// Automatically chooses granularity based on range length:
+  /// - 1-31 days: per-day breakdown
+  /// - 32+ days: per-week breakdown
+  Future<Map<String, double>> getRevenueForPeriod(
+    DateTime startDate,
+    DateTime endDate,
+  ) async {
+    final snapshot = await _transactionsCollection
+        .where(
+          'createdAt',
+          isGreaterThanOrEqualTo: Timestamp.fromDate(startDate),
+        )
+        .where('createdAt', isLessThanOrEqualTo: Timestamp.fromDate(endDate))
+        .orderBy('createdAt')
+        .get();
+
+    final daysDiff = endDate.difference(startDate).inDays + 1;
+    final Map<String, double> revenueData = {};
+
+    if (daysDiff <= 31) {
+      // Per-day breakdown - initialize all days
+      for (int i = 0; i < daysDiff; i++) {
+        final date = startDate.add(Duration(days: i));
+        final key = '${date.day}';
+        revenueData[key] = 0;
+      }
+
+      // Aggregate revenue per day
+      for (final doc in snapshot.docs) {
+        final data = doc.data() as Map<String, dynamic>;
+        final timestamp = data['createdAt'] as Timestamp?;
+        if (timestamp == null) continue;
+
+        final date = timestamp.toDate();
+        final key = '${date.day}';
+        final amount = (data['totalAmount'] ?? 0).toDouble();
+        revenueData[key] = (revenueData[key] ?? 0) + amount;
+      }
+    } else {
+      // Per-week breakdown for longer ranges
+      // Group by week number
+      final Map<int, double> weeklyData = {};
+      int weekNum = 1;
+      DateTime weekStart = startDate;
+
+      while (weekStart.isBefore(endDate) ||
+          weekStart.isAtSameMomentAs(endDate)) {
+        weeklyData[weekNum] = 0;
+        weekStart = weekStart.add(const Duration(days: 7));
+        weekNum++;
+      }
+
+      for (final doc in snapshot.docs) {
+        final data = doc.data() as Map<String, dynamic>;
+        final timestamp = data['createdAt'] as Timestamp?;
+        if (timestamp == null) continue;
+
+        final date = timestamp.toDate();
+        final daysSinceStart = date.difference(startDate).inDays;
+        final week = (daysSinceStart ~/ 7) + 1;
+        final amount = (data['totalAmount'] ?? 0).toDouble();
+        weeklyData[week] = (weeklyData[week] ?? 0) + amount;
+      }
+
+      // Convert to string keys
+      for (final entry in weeklyData.entries) {
+        revenueData['W${entry.key}'] = entry.value;
+      }
+    }
+
+    return revenueData;
+  }
+
+  /// Get summary for a date range
+  Future<Map<String, dynamic>> getSummaryForPeriod(
+    DateTime startDate,
+    DateTime endDate,
+  ) async {
+    final snapshot = await _transactionsCollection
+        .where(
+          'createdAt',
+          isGreaterThanOrEqualTo: Timestamp.fromDate(startDate),
+        )
+        .where('createdAt', isLessThanOrEqualTo: Timestamp.fromDate(endDate))
+        .get();
+
+    double totalRevenue = 0;
+    int totalTransactions = snapshot.docs.length;
+
+    for (final doc in snapshot.docs) {
+      final data = doc.data() as Map<String, dynamic>;
+      totalRevenue += (data['totalAmount'] ?? 0).toDouble();
+    }
+
+    return {
+      'totalRevenue': totalRevenue,
+      'totalTransactions': totalTransactions,
+    };
+  }
+
+  /// Get top selling products for a specific period
+  Future<List<Map<String, dynamic>>> getTopProductsForPeriod(
+    DateTime startDate,
+    DateTime endDate, {
+    int limit = 5,
+  }) async {
+    final snapshot = await _transactionsCollection
+        .where(
+          'createdAt',
+          isGreaterThanOrEqualTo: Timestamp.fromDate(startDate),
+        )
+        .where('createdAt', isLessThanOrEqualTo: Timestamp.fromDate(endDate))
+        .get();
+
+    // Aggregate product sales
+    final Map<String, Map<String, dynamic>> productStats = {};
+
+    for (final doc in snapshot.docs) {
+      final data = doc.data() as Map<String, dynamic>;
+      final items = data['items'] as List<dynamic>? ?? [];
+
+      for (final item in items) {
+        final productName = item['productName'] ?? 'Unknown';
+        final qty = (item['qty'] ?? 1) as int;
+        final subtotal = (item['subtotal'] ?? 0).toDouble();
+
+        if (!productStats.containsKey(productName)) {
+          productStats[productName] = {
+            'productName': productName,
+            'totalQty': 0,
+            'totalRevenue': 0.0,
+          };
+        }
+
+        productStats[productName]!['totalQty'] += qty;
+        productStats[productName]!['totalRevenue'] += subtotal;
+      }
+    }
+
+    // Sort by quantity and take top N
+    final sorted = productStats.values.toList()
+      ..sort((a, b) => (b['totalQty'] as int).compareTo(a['totalQty'] as int));
+
+    return sorted.take(limit).toList();
+  }
+
+  /// Get transactions for a period with pagination support
+  Future<List<Map<String, dynamic>>> getTransactionsForPeriod(
+    DateTime startDate,
+    DateTime endDate, {
+    int limit = 100,
+  }) async {
+    final snapshot = await _transactionsCollection
+        .where(
+          'createdAt',
+          isGreaterThanOrEqualTo: Timestamp.fromDate(startDate),
+        )
+        .where('createdAt', isLessThanOrEqualTo: Timestamp.fromDate(endDate))
+        .orderBy('createdAt', descending: true)
+        .limit(limit)
+        .get();
+
+    return snapshot.docs.map((doc) {
+      final data = doc.data() as Map<String, dynamic>;
+      return {'id': doc.id, ...data};
+    }).toList();
   }
 }

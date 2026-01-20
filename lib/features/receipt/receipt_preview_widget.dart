@@ -13,6 +13,11 @@ class ReceiptPreviewWidget extends StatelessWidget {
   final String paymentMethod;
   final DateTime? timestamp;
   final String? transactionId;
+  final double? cashReceived;
+
+  final double? changeAmount;
+  final String? staffName;
+  final String? footer;
 
   const ReceiptPreviewWidget({
     super.key,
@@ -21,6 +26,11 @@ class ReceiptPreviewWidget extends StatelessWidget {
     required this.paymentMethod,
     this.timestamp,
     this.transactionId,
+    this.cashReceived,
+
+    this.changeAmount,
+    this.staffName,
+    this.footer,
   });
 
   // Store settings
@@ -246,6 +256,53 @@ class ReceiptPreviewWidget extends StatelessWidget {
                   ),
                   const SizedBox(height: 8),
 
+                  // Cash Payment Details (show if cash)
+                  if (paymentMethod.toLowerCase() == 'cash' &&
+                      cashReceived != null) ...[
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          'Tunai',
+                          style: GoogleFonts.lexendDeca(
+                            fontSize: 13,
+                            color: AppColors.textSecondary,
+                          ),
+                        ),
+                        Text(
+                          _formatRupiah(cashReceived!),
+                          style: GoogleFonts.lexendDeca(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w500,
+                            color: AppColors.textPrimary,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          'Kembali',
+                          style: GoogleFonts.lexendDeca(
+                            fontSize: 13,
+                            color: AppColors.textSecondary,
+                          ),
+                        ),
+                        Text(
+                          _formatRupiah(changeAmount ?? 0),
+                          style: GoogleFonts.lexendDeca(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: AppColors.success,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                  ],
+
                   // Payment Method
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -365,6 +422,32 @@ class ReceiptPreviewWidget extends StatelessWidget {
                       );
                     },
                   ),
+
+                  // Staff Name (if provided)
+                  if (staffName != null && staffName!.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      'Kasir: $staffName',
+                      style: GoogleFonts.lexendDeca(
+                        fontSize: 11,
+                        color: AppColors.textSecondary,
+                      ),
+                    ),
+                  ],
+
+                  // Custom Footer Message
+                  if (footer != null && footer!.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      footer!,
+                      textAlign: TextAlign.center,
+                      style: GoogleFonts.lexendDeca(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                        color: AppColors.textPrimary,
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),

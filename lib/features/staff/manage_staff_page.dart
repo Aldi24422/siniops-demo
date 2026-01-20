@@ -20,6 +20,21 @@ class _ManageStaffPageState extends State<ManageStaffPage> {
 
   bool _isAdding = false;
   String? _deletingUid;
+  String? _currentUserRole; // To determine what roles can be added
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchCurrentUserRole();
+  }
+
+  Future<void> _fetchCurrentUserRole() async {
+    final uid = _authController.currentUser?.uid;
+    if (uid != null) {
+      final role = await _authController.getUserRole(uid);
+      if (mounted) setState(() => _currentUserRole = role);
+    }
+  }
 
   @override
   void dispose() {
@@ -40,14 +55,24 @@ class _ManageStaffPageState extends State<ManageStaffPage> {
     );
   }
 
-  /// Show dialog to add new cashier
-  void _showAddCashierDialog() {
+  /// Show dialog to add new staff
+  void _showAddStaffDialog() {
     _nameController.clear();
     _emailController.clear();
     _passwordController.clear();
 
-    // Local state for password visibility
+    // Local state
     bool isPasswordObscure = true;
+    String selectedRole = 'crew'; // Default
+
+    // Determine available roles based on current user (simplified for now)
+    // Owner can add everyone. Outlet Manager should only be able to add Crew.
+    final bool isOwner = _currentUserRole == 'owner';
+    final List<Map<String, String>> roleOptions = [
+      {'value': 'crew', 'label': 'Crew'},
+      if (isOwner) {'value': 'outlet_manager', 'label': 'Outlet Manager'},
+      if (isOwner) {'value': 'owner', 'label': 'Owner'},
+    ];
 
     showDialog(
       context: context,
@@ -74,7 +99,7 @@ class _ManageStaffPageState extends State<ManageStaffPage> {
                 ),
                 const SizedBox(width: 12),
                 Text(
-                  'Tambah Karyawan',
+                  'Tambah Tim',
                   style: GoogleFonts.poppins(
                     fontWeight: FontWeight.w600,
                     fontSize: 18,
@@ -87,12 +112,59 @@ class _ManageStaffPageState extends State<ManageStaffPage> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
+                  // Role Dropdown (only if multiple choices)
+                  if (roleOptions.length > 1) ...[
+                    InputDecorator(
+                      decoration: InputDecoration(
+                        labelText: 'Role',
+                        prefixIcon: const Icon(Icons.badge_outlined),
+                        filled: true,
+                        fillColor: AppColors.background,
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(10),
+                          borderSide: BorderSide.none,
+                        ),
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                        ),
+                      ),
+                      child: DropdownButtonHideUnderline(
+                        child: DropdownButton<String>(
+                          value: selectedRole,
+                          isExpanded: true,
+                          isDense: true,
+                          dropdownColor: AppColors.surface,
+                          style: GoogleFonts.lexendDeca(
+                            fontSize: 14,
+                            color: AppColors.textPrimary,
+                          ),
+                          items: roleOptions.map((role) {
+                            return DropdownMenuItem(
+                              value: role['value'],
+                              child: Text(
+                                role['label']!,
+                                style: GoogleFonts.lexendDeca(
+                                  color: AppColors.textPrimary,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            );
+                          }).toList(),
+                          onChanged: (val) {
+                            setDialogState(() => selectedRole = val!);
+                          },
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                  ],
+
                   // Name Field
                   TextField(
                     controller: _nameController,
                     decoration: InputDecoration(
                       labelText: 'Nama Lengkap',
-                      prefixIcon: const Icon(Icons.badge_outlined),
+                      prefixIcon: const Icon(Icons.person_outline),
                       filled: true,
                       fillColor: AppColors.background,
                       border: OutlineInputBorder(
@@ -135,7 +207,7 @@ class _ManageStaffPageState extends State<ManageStaffPage> {
                   ),
                   const SizedBox(height: 16),
 
-                  // Password Field with visibility toggle
+                  // Password Field
                   TextField(
                     controller: _passwordController,
                     obscureText: isPasswordObscure,
@@ -206,16 +278,16 @@ class _ManageStaffPageState extends State<ManageStaffPage> {
                           return;
                         }
 
-                        // Capture navigator before async operation
                         final navigator = Navigator.of(context);
 
                         setDialogState(() => _isAdding = true);
                         setState(() => _isAdding = true);
 
-                        final result = await _authController.addCashier(
+                        final result = await _authController.addStaff(
                           email: email,
                           password: password,
                           name: name,
+                          role: selectedRole,
                         );
 
                         setDialogState(() => _isAdding = false);
@@ -262,94 +334,36 @@ class _ManageStaffPageState extends State<ManageStaffPage> {
   }
 
   /// Show confirmation dialog before deleting
-  void _showDeleteConfirmation(CashierData cashier) {
+  void _confirmDelete(StaffData staff) {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: AppColors.error.withValues(alpha: 0.1),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: const Icon(
-                Icons.warning_rounded,
-                color: AppColors.error,
-                size: 24,
-              ),
-            ),
-            const SizedBox(width: 12),
-            Text(
-              'Nonaktifkan Karyawan?',
-              style: GoogleFonts.poppins(
-                fontWeight: FontWeight.w600,
-                fontSize: 16,
-              ),
-            ),
-          ],
+        title: Text(
+          "Hapus Akun?",
+          style: GoogleFonts.poppins(fontWeight: FontWeight.w600),
         ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Karyawan "${cashier.displayName}" akan dinonaktifkan dan tidak bisa login lagi.',
-              style: GoogleFonts.lexendDeca(
-                color: AppColors.textSecondary,
-                fontSize: 14,
-              ),
-            ),
-            const SizedBox(height: 12),
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.blue.withValues(alpha: 0.1),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Row(
-                children: [
-                  Icon(Icons.info_outline, color: Colors.blue[700], size: 18),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'Anda dapat mengaktifkan kembali akun ini nanti.',
-                      style: GoogleFonts.lexendDeca(
-                        color: Colors.blue[800],
-                        fontSize: 12,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
+        content: Text(
+          staff.role == 'owner'
+              ? "Karena ${staff.displayName} adalah Owner, permintaan konfirmasi akan dikirim ke akun mereka sebelum dihapus.\n\nLanjutkan?"
+              : "Anda yakin ingin menghapus akun ${staff.displayName}?\n\nTindakan ini permanen dan pengguna tidak akan bisa login lagi.",
+          style: GoogleFonts.lexendDeca(),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: Text(
-              'Batal',
-              style: GoogleFonts.lexendDeca(color: AppColors.textSecondary),
-            ),
+            child: const Text("Batal"),
           ),
-          ElevatedButton(
+          TextButton(
             onPressed: () async {
-              Navigator.pop(context);
-              await _deleteCashier(cashier);
+              Navigator.pop(context); // Close dialog
+              _deleteStaff(staff);
             },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppColors.error,
-              foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(10),
-              ),
-            ),
             child: Text(
-              'Nonaktifkan',
-              style: GoogleFonts.lexendDeca(fontWeight: FontWeight.w600),
+              staff.role == 'owner' ? "Kirim Permintaan" : "Hapus",
+              style: GoogleFonts.lexendDeca(
+                color: AppColors.error,
+                fontWeight: FontWeight.bold,
+              ),
             ),
           ),
         ],
@@ -357,31 +371,32 @@ class _ManageStaffPageState extends State<ManageStaffPage> {
     );
   }
 
-  Future<void> _deleteCashier(CashierData cashier) async {
-    setState(() => _deletingUid = cashier.uid);
+  Future<void> _deleteStaff(StaffData staff) async {
+    setState(() => _deletingUid = staff.uid);
 
-    final success = await _authController.deleteCashier(cashier.uid);
+    bool success = false;
 
-    setState(() => _deletingUid = null);
-
-    if (success) {
-      _showSnackBar('Karyawan berhasil dinonaktifkan');
+    // Special logic for Owner deletion
+    if (staff.role == 'owner') {
+      success = await _authController.requestOwnerDeletion(staff.uid);
+      if (success && mounted) {
+        _showSnackBar(
+          'Permintaan penghapusan telah dikirim ke ${staff.displayName}',
+        );
+      }
     } else {
-      _showSnackBar('Gagal menonaktifkan karyawan', isError: true);
+      // Normal deletion for crew/manager
+      success = await _authController.deleteStaff(staff.uid);
+      if (success && mounted) {
+        _showSnackBar('Akun berhasil dihapus');
+      }
     }
-  }
 
-  Future<void> _reactivateCashier(CashierData cashier) async {
-    setState(() => _deletingUid = cashier.uid);
-
-    final success = await _authController.reactivateCashier(cashier.uid);
-
-    setState(() => _deletingUid = null);
-
-    if (success) {
-      _showSnackBar('✅ Karyawan berhasil diaktifkan kembali');
-    } else {
-      _showSnackBar('Gagal mengaktifkan karyawan', isError: true);
+    if (mounted) {
+      setState(() => _deletingUid = null);
+      if (!success) {
+        _showSnackBar('Gagal memproses permintaan', isError: true);
+      }
     }
   }
 
@@ -399,7 +414,7 @@ class _ManageStaffPageState extends State<ManageStaffPage> {
           onPressed: () => Navigator.pop(context),
         ),
         title: Text(
-          'Daftar Karyawan',
+          "Manajemen Tim",
           style: GoogleFonts.poppins(
             fontSize: 18,
             fontWeight: FontWeight.w600,
@@ -413,78 +428,88 @@ class _ManageStaffPageState extends State<ManageStaffPage> {
             height: 1.0,
           ),
         ),
+        centerTitle: true,
+        iconTheme: const IconThemeData(color: AppColors.textPrimary),
       ),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: _showAddCashierDialog,
+        onPressed: _showAddStaffDialog,
         backgroundColor: AppColors.primary,
-        icon: const Icon(Icons.person_add, color: Colors.white),
+        icon: const Icon(Icons.person_add_alt_1, color: Colors.white),
         label: Text(
-          'Tambah Karyawan',
+          "Tambah Tim",
           style: GoogleFonts.lexendDeca(
-            color: Colors.white,
             fontWeight: FontWeight.w600,
+            color: Colors.white,
           ),
         ),
       ),
-      body: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 800),
-          child: StreamBuilder<List<CashierData>>(
-            stream: _authController.getCashiers(),
-            builder: (context, snapshot) {
-              if (snapshot.hasError) {
-                return Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(
-                        Icons.error_outline,
-                        size: 64,
-                        color: AppColors.error.withValues(alpha: 0.5),
-                      ),
-                      const SizedBox(height: 16),
-                      Text(
-                        'Terjadi kesalahan',
-                        style: GoogleFonts.lexendDeca(
-                          fontSize: 16,
-                          color: AppColors.textSecondary,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        snapshot.error.toString(),
-                        style: GoogleFonts.lexendDeca(
-                          fontSize: 12,
-                          color: AppColors.error,
-                        ),
-                        textAlign: TextAlign.center,
-                      ),
-                    ],
+      body: StreamBuilder<List<StaffData>>(
+        stream: _currentUserRole == null
+            ? const Stream.empty()
+            : _authController.getStaff(_currentUserRole!),
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(
+              child: CircularProgressIndicator(color: AppColors.primary),
+            );
+          }
+
+          if (snapshot.hasError) {
+            return Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    Icons.error_outline,
+                    size: 64,
+                    color: AppColors.error.withValues(alpha: 0.5),
                   ),
-                );
-              }
+                  const SizedBox(height: 16),
+                  Text(
+                    'Terjadi kesalahan',
+                    style: GoogleFonts.lexendDeca(
+                      fontSize: 16,
+                      color: AppColors.textSecondary,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    snapshot.error.toString(),
+                    style: GoogleFonts.lexendDeca(
+                      fontSize: 12,
+                      color: AppColors.error,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                ],
+              ),
+            );
+          }
 
-              if (!snapshot.hasData) {
-                return const Center(
-                  child: CircularProgressIndicator(color: AppColors.primary),
-                );
-              }
+          final staffList = snapshot.data ?? [];
 
-              final cashiers = snapshot.data!;
+          if (staffList.isEmpty) {
+            return _buildEmptyState();
+          }
 
-              if (cashiers.isEmpty) {
-                return _buildEmptyState();
-              }
+          // Sort: Owner (0) > Manager (1) > Crew/Cashier (2)
+          final sortedList = List<StaffData>.from(staffList);
+          sortedList.sort((a, b) {
+            int getRank(String role) {
+              if (role == 'owner') return 0;
+              if (role == 'outlet_manager') return 1;
+              return 2;
+            }
 
-              return ListView.builder(
-                padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
-                itemCount: cashiers.length,
-                itemBuilder: (context, index) =>
-                    _buildCashierCard(cashiers[index]),
-              );
-            },
-          ),
-        ),
+            return getRank(a.role).compareTo(getRank(b.role));
+          });
+
+          return ListView.builder(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
+            itemCount: sortedList.length,
+            itemBuilder: (context, index) => _buildStaffCard(sortedList[index]),
+          );
+        },
       ),
     );
   }
@@ -508,7 +533,7 @@ class _ManageStaffPageState extends State<ManageStaffPage> {
           ),
           const SizedBox(height: 24),
           Text(
-            'Belum ada karyawan',
+            'Belum ada tim',
             style: GoogleFonts.lexendDeca(
               fontSize: 18,
               fontWeight: FontWeight.w600,
@@ -517,7 +542,7 @@ class _ManageStaffPageState extends State<ManageStaffPage> {
           ),
           const SizedBox(height: 8),
           Text(
-            'Tambahkan karyawan baru dengan tombol\ndi bawah',
+            'Tambahkan tim baru dengan tombol\ndi bawah',
             textAlign: TextAlign.center,
             style: GoogleFonts.lexendDeca(
               fontSize: 14,
@@ -529,130 +554,161 @@ class _ManageStaffPageState extends State<ManageStaffPage> {
     );
   }
 
-  Widget _buildCashierCard(CashierData cashier) {
-    final isDeleting = _deletingUid == cashier.uid;
+  Widget _buildStaffCard(StaffData staff) {
+    final isDeleting = _deletingUid == staff.uid;
+    final currentUserUid = _authController.currentUser?.uid;
+
+    // Use specific colors for roles
+    Color roleColor;
+    String roleLabel;
+
+    switch (staff.role) {
+      case 'owner':
+        roleColor = Colors.purple;
+        roleLabel = 'Owner';
+        break;
+      case 'outlet_manager':
+        roleColor = Colors.orange;
+        roleLabel = 'Manager';
+        break;
+      case 'crew':
+      case 'cashier': // Legacy support
+        roleColor = Colors.blue;
+        roleLabel = 'Crew';
+        break;
+      default:
+        roleColor = Colors.grey;
+        roleLabel = staff.role;
+        break;
+    }
+
+    // Permission Logic for Deletion
+    // Owner can delete anyone except themselves.
+    // Outlet Manager can only delete Crew. NOT other managers or owners.
+    bool canDelete = false;
+    if (_currentUserRole == 'owner') {
+      canDelete = staff.uid != currentUserUid;
+    } else if (_currentUserRole == 'outlet_manager') {
+      canDelete = staff.role == 'crew' || staff.role == 'cashier';
+    }
 
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
-        side: BorderSide(
-          color: cashier.isActive
-              ? Colors.transparent
-              : AppColors.error.withValues(alpha: 0.3),
-          width: 1,
-        ),
+        side: BorderSide(color: Colors.grey.withValues(alpha: 0.1), width: 1),
       ),
-      child: Opacity(
-        opacity: cashier.isActive ? 1.0 : 0.6,
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Row(
-            children: [
-              // Avatar
-              CircleAvatar(
-                radius: 24,
-                backgroundColor: cashier.isActive
-                    ? AppColors.primary.withValues(alpha: 0.1)
-                    : AppColors.textSecondary.withValues(alpha: 0.1),
+      elevation: 0,
+      color: AppColors.background, // Light background for card
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Row(
+          children: [
+            // Avatar
+            Container(
+              width: 48,
+              height: 48,
+              decoration: BoxDecoration(
+                color: roleColor.withValues(alpha: 0.1),
+                shape: BoxShape.circle,
+              ),
+              child: Center(
                 child: Text(
-                  cashier.initials,
+                  _getInitials(staff.displayName),
                   style: GoogleFonts.poppins(
-                    fontSize: 16,
+                    fontSize: 18,
                     fontWeight: FontWeight.bold,
-                    color: cashier.isActive
-                        ? AppColors.primary
-                        : AppColors.textSecondary,
+                    color: roleColor,
                   ),
                 ),
               ),
-              const SizedBox(width: 16),
+            ),
+            const SizedBox(width: 16),
 
-              // Info
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      cashier.displayName,
-                      style: GoogleFonts.lexendDeca(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w600,
-                        color: AppColors.textPrimary,
+            // Info (Name & Email)
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Flexible(
+                        child: Text(
+                          staff.displayName,
+                          style: GoogleFonts.poppins(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                            color: AppColors.textPrimary,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      cashier.email,
-                      style: GoogleFonts.lexendDeca(
-                        fontSize: 13,
-                        color: AppColors.textSecondary,
+                      const SizedBox(width: 8),
+                      // Role Badge (Next to name)
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          color: roleColor.withValues(alpha: 0.1),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Text(
+                          roleLabel,
+                          style: GoogleFonts.lexendDeca(
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                            color: roleColor,
+                          ),
+                        ),
                       ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 12),
-
-              // Status Badge + Actions (aligned horizontally)
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: cashier.isActive
-                      ? AppColors.success.withValues(alpha: 0.1)
-                      : AppColors.error.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: Text(
-                  cashier.isActive ? 'Aktif' : 'Nonaktif',
-                  style: GoogleFonts.lexendDeca(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
-                    color: cashier.isActive
-                        ? AppColors.success
-                        : AppColors.error,
+                    ],
                   ),
-                ),
-              ),
-              const SizedBox(width: 4),
-
-              // Actions
-              if (isDeleting)
-                const SizedBox(
-                  width: 40,
-                  height: 40,
-                  child: Center(
-                    child: SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2),
+                  const SizedBox(height: 4),
+                  Text(
+                    staff.email,
+                    style: GoogleFonts.lexendDeca(
+                      fontSize: 12,
+                      color: AppColors.textSecondary,
                     ),
                   ),
-                )
-              else if (cashier.isActive)
-                IconButton(
-                  onPressed: () => _showDeleteConfirmation(cashier),
-                  icon: const Icon(Icons.delete_outline),
-                  color: AppColors.error,
-                  tooltip: 'Nonaktifkan',
-                  constraints: const BoxConstraints(
-                    minWidth: 40,
-                    minHeight: 40,
-                  ),
-                )
-              else
-                TextButton(
-                  onPressed: () => _reactivateCashier(cashier),
-                  style: TextButton.styleFrom(
-                    foregroundColor: AppColors.success,
-                    padding: const EdgeInsets.symmetric(horizontal: 8),
-                  ),
-                  child: const Text('Aktifkan'),
-                ),
-            ],
-          ),
+                ],
+              ),
+            ),
+
+            // Delete Button (if permitted)
+            if (canDelete)
+              IconButton(
+                onPressed: isDeleting ? null : () => _confirmDelete(staff),
+                icon: isDeleting
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: AppColors.error,
+                        ),
+                      )
+                    : const Icon(
+                        Icons.delete_outline_rounded,
+                        color: AppColors.error,
+                        size: 20,
+                      ),
+                tooltip: "Hapus Akun",
+              ),
+          ],
         ),
       ),
     );
+  }
+
+  String _getInitials(String name) {
+    if (name.isEmpty) return '';
+    final parts = name.trim().split(' ');
+    if (parts.length >= 2) {
+      return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
+    }
+    return name.substring(0, name.length >= 2 ? 2 : name.length).toUpperCase();
   }
 }

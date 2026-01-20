@@ -6,6 +6,10 @@ import '../../core/models/product_model.dart';
 import '../../core/models/ingredient_model.dart';
 import '../../core/services/product_controller.dart';
 import '../../core/services/ingredient_controller.dart';
+import '../../core/services/mock_product_controller.dart';
+import '../../core/services/mock_ingredient_controller.dart';
+import '../../core/services/preview_mode_controller.dart';
+import '../../core/widgets/preview_mode_banner.dart';
 
 class ManageMenuPage extends StatefulWidget {
   const ManageMenuPage({super.key});
@@ -17,6 +21,36 @@ class ManageMenuPage extends StatefulWidget {
 class _ManageMenuPageState extends State<ManageMenuPage> {
   final ProductController _productController = ProductController();
   final IngredientController _ingredientController = IngredientController();
+  final MockProductController _mockProductController = MockProductController();
+  final MockIngredientController _mockIngredientController =
+      MockIngredientController();
+
+  bool get _isPreviewMode => PreviewModeController.instance.isPreviewMode;
+
+  // Conditional getters for controllers
+  Stream<List<Product>> get _productsStream => _isPreviewMode
+      ? _mockProductController.getProducts()
+      : _productController.getProducts();
+
+  Stream<List<Ingredient>> get _ingredientsStream => _isPreviewMode
+      ? _mockIngredientController.getIngredients()
+      : _ingredientController.getIngredients();
+
+  Future<Ingredient?> _getIngredientById(String id) => _isPreviewMode
+      ? _mockIngredientController.getIngredientById(id)
+      : _ingredientController.getIngredientById(id);
+
+  Future<String> _addProduct(Product product) => _isPreviewMode
+      ? _mockProductController.addProduct(product)
+      : _productController.addProduct(product);
+
+  Future<void> _updateProduct(Product product) => _isPreviewMode
+      ? _mockProductController.updateProduct(product)
+      : _productController.updateProduct(product);
+
+  Future<void> _deleteProduct(String id) => _isPreviewMode
+      ? _mockProductController.deleteProduct(id)
+      : _productController.deleteProduct(id);
 
   @override
   Widget build(BuildContext context) {
@@ -55,65 +89,74 @@ class _ManageMenuPageState extends State<ManageMenuPage> {
           ),
         ),
       ),
-      body: StreamBuilder<List<Product>>(
-        stream: _productController.getProducts(),
-        builder: (context, snapshot) {
-          if (snapshot.hasError) {
-            return Center(
-              child: Text(
-                "Error: ${snapshot.error}",
-                style: GoogleFonts.lexendDeca(color: AppColors.error),
-              ),
-            );
-          }
-
-          if (!snapshot.hasData) {
-            return const Center(
-              child: CircularProgressIndicator(color: AppColors.primary),
-            );
-          }
-
-          final products = snapshot.data!;
-
-          if (products.isEmpty) {
-            return Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const Icon(
-                    Icons.restaurant_menu_rounded,
-                    size: 64,
-                    color: AppColors.accent,
-                  ),
-                  const SizedBox(height: 16),
-                  Text(
-                    "Belum ada menu",
-                    style: GoogleFonts.lexendDeca(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                      color: AppColors.textSecondary,
+      body: Column(
+        children: [
+          const PreviewModeBanner(),
+          Expanded(
+            child: StreamBuilder<List<Product>>(
+              stream: _productsStream,
+              builder: (context, snapshot) {
+                if (snapshot.hasError) {
+                  return Center(
+                    child: Text(
+                      "Error: ${snapshot.error}",
+                      style: GoogleFonts.lexendDeca(color: AppColors.error),
                     ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    "Tap tombol + untuk menambah menu baru",
-                    style: GoogleFonts.lexendDeca(
-                      fontSize: 14,
-                      color: AppColors.textSecondary,
-                    ),
-                  ),
-                ],
-              ),
-            );
-          }
+                  );
+                }
 
-          return ListView.separated(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
-            itemCount: products.length,
-            separatorBuilder: (context, index) => const SizedBox(height: 12),
-            itemBuilder: (context, index) => _buildMenuCard(products[index]),
-          );
-        },
+                if (!snapshot.hasData) {
+                  return const Center(
+                    child: CircularProgressIndicator(color: AppColors.primary),
+                  );
+                }
+
+                final products = snapshot.data!;
+
+                if (products.isEmpty) {
+                  return Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Icon(
+                          Icons.restaurant_menu_rounded,
+                          size: 64,
+                          color: AppColors.accent,
+                        ),
+                        const SizedBox(height: 16),
+                        Text(
+                          "Belum ada menu",
+                          style: GoogleFonts.lexendDeca(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                            color: AppColors.textSecondary,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          "Tap tombol + untuk menambah menu baru",
+                          style: GoogleFonts.lexendDeca(
+                            fontSize: 14,
+                            color: AppColors.textSecondary,
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                }
+
+                return ListView.separated(
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
+                  itemCount: products.length,
+                  separatorBuilder: (context, index) =>
+                      const SizedBox(height: 12),
+                  itemBuilder: (context, index) =>
+                      _buildMenuCard(products[index]),
+                );
+              },
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -501,7 +544,7 @@ class _ManageMenuPageState extends State<ManageMenuPage> {
 
                 try {
                   if (isEdit) {
-                    await _productController.updateProduct(
+                    await _updateProduct(
                       Product(
                         id: product.id,
                         name: name,
@@ -513,7 +556,7 @@ class _ManageMenuPageState extends State<ManageMenuPage> {
                     );
                     _showSnackBar("Menu berhasil diupdate");
                   } else {
-                    await _productController.addProduct(
+                    await _addProduct(
                       Product(
                         name: name,
                         description: desc,
@@ -554,7 +597,7 @@ class _ManageMenuPageState extends State<ManageMenuPage> {
     required VoidCallback onDelete,
   }) {
     return FutureBuilder<Ingredient?>(
-      future: _ingredientController.getIngredientById(item.ingredientId),
+      future: _getIngredientById(item.ingredientId),
       builder: (context, snapshot) {
         final ingredient = snapshot.data;
         final name = ingredient?.name ?? 'Loading...';
@@ -630,7 +673,7 @@ class _ManageMenuPageState extends State<ManageMenuPage> {
             ],
           ),
           content: StreamBuilder<List<Ingredient>>(
-            stream: _ingredientController.getIngredients(),
+            stream: _ingredientsStream,
             builder: (context, snapshot) {
               if (!snapshot.hasData) {
                 return const SizedBox(
@@ -804,7 +847,7 @@ class _ManageMenuPageState extends State<ManageMenuPage> {
             onPressed: () async {
               Navigator.pop(ctx);
               try {
-                await _productController.deleteProduct(product.id!);
+                await _deleteProduct(product.id!);
                 _showSnackBar("Menu berhasil dihapus");
               } catch (e) {
                 _showSnackBar("Error: $e", isError: true);

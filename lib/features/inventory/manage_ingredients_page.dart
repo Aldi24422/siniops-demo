@@ -4,6 +4,9 @@ import 'package:google_fonts/google_fonts.dart';
 import '../../core/constants/app_colors.dart';
 import '../../core/models/ingredient_model.dart';
 import '../../core/services/ingredient_controller.dart';
+import '../../core/services/mock_ingredient_controller.dart';
+import '../../core/services/preview_mode_controller.dart';
+import '../../core/widgets/preview_mode_banner.dart';
 
 class ManageIngredientsPage extends StatefulWidget {
   const ManageIngredientsPage({super.key});
@@ -14,6 +17,30 @@ class ManageIngredientsPage extends StatefulWidget {
 
 class _ManageIngredientsPageState extends State<ManageIngredientsPage> {
   final IngredientController _ingredientController = IngredientController();
+  final MockIngredientController _mockIngredientController =
+      MockIngredientController();
+
+  bool get _isPreviewMode => PreviewModeController.instance.isPreviewMode;
+
+  Stream<List<Ingredient>> get _ingredientsStream => _isPreviewMode
+      ? _mockIngredientController.getIngredients()
+      : _ingredientController.getIngredients();
+
+  Future<String> _addIngredient(Ingredient ing) => _isPreviewMode
+      ? _mockIngredientController.addIngredient(ing)
+      : _ingredientController.addIngredient(ing);
+
+  Future<void> _updateIngredient(Ingredient ing) => _isPreviewMode
+      ? _mockIngredientController.updateIngredient(ing)
+      : _ingredientController.updateIngredient(ing);
+
+  Future<void> _deleteIngredient(String id) => _isPreviewMode
+      ? _mockIngredientController.deleteIngredient(id)
+      : _ingredientController.deleteIngredient(id);
+
+  Future<void> _restockIngredient(String id, double amount) => _isPreviewMode
+      ? _mockIngredientController.restockIngredient(id, amount)
+      : _ingredientController.restockIngredient(id, amount);
 
   @override
   Widget build(BuildContext context) {
@@ -52,66 +79,74 @@ class _ManageIngredientsPageState extends State<ManageIngredientsPage> {
           ),
         ),
       ),
-      body: StreamBuilder<List<Ingredient>>(
-        stream: _ingredientController.getIngredients(),
-        builder: (context, snapshot) {
-          if (snapshot.hasError) {
-            return Center(
-              child: Text(
-                "Error: ${snapshot.error}",
-                style: GoogleFonts.lexendDeca(color: AppColors.error),
-              ),
-            );
-          }
-
-          if (!snapshot.hasData) {
-            return const Center(
-              child: CircularProgressIndicator(color: AppColors.primary),
-            );
-          }
-
-          final ingredients = snapshot.data!;
-
-          if (ingredients.isEmpty) {
-            return Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const Icon(
-                    Icons.inventory_2_rounded,
-                    size: 64,
-                    color: AppColors.accent,
-                  ),
-                  const SizedBox(height: 16),
-                  Text(
-                    "Belum ada bahan baku",
-                    style: GoogleFonts.lexendDeca(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                      color: AppColors.textSecondary,
+      body: Column(
+        children: [
+          const PreviewModeBanner(),
+          Expanded(
+            child: StreamBuilder<List<Ingredient>>(
+              stream: _ingredientsStream,
+              builder: (context, snapshot) {
+                if (snapshot.hasError) {
+                  return Center(
+                    child: Text(
+                      "Error: ${snapshot.error}",
+                      style: GoogleFonts.lexendDeca(color: AppColors.error),
                     ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    "Tap tombol + untuk menambah bahan baru",
-                    style: GoogleFonts.lexendDeca(
-                      fontSize: 14,
-                      color: AppColors.textSecondary,
-                    ),
-                  ),
-                ],
-              ),
-            );
-          }
+                  );
+                }
 
-          return ListView.separated(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
-            itemCount: ingredients.length,
-            separatorBuilder: (context, index) => const SizedBox(height: 12),
-            itemBuilder: (context, index) =>
-                _buildIngredientCard(ingredients[index]),
-          );
-        },
+                if (!snapshot.hasData) {
+                  return const Center(
+                    child: CircularProgressIndicator(color: AppColors.primary),
+                  );
+                }
+
+                final ingredients = snapshot.data!;
+
+                if (ingredients.isEmpty) {
+                  return Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Icon(
+                          Icons.inventory_2_rounded,
+                          size: 64,
+                          color: AppColors.accent,
+                        ),
+                        const SizedBox(height: 16),
+                        Text(
+                          "Belum ada bahan baku",
+                          style: GoogleFonts.lexendDeca(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                            color: AppColors.textSecondary,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          "Tap tombol + untuk menambah bahan baru",
+                          style: GoogleFonts.lexendDeca(
+                            fontSize: 14,
+                            color: AppColors.textSecondary,
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                }
+
+                return ListView.separated(
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
+                  itemCount: ingredients.length,
+                  separatorBuilder: (context, index) =>
+                      const SizedBox(height: 12),
+                  itemBuilder: (context, index) =>
+                      _buildIngredientCard(ingredients[index]),
+                );
+              },
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -445,7 +480,7 @@ class _ManageIngredientsPageState extends State<ManageIngredientsPage> {
 
                 try {
                   if (isEdit) {
-                    await _ingredientController.updateIngredient(
+                    await _updateIngredient(
                       Ingredient(
                         id: ingredient.id,
                         name: name,
@@ -456,7 +491,7 @@ class _ManageIngredientsPageState extends State<ManageIngredientsPage> {
                     );
                     _showSnackBar("Bahan berhasil diupdate");
                   } else {
-                    await _ingredientController.addIngredient(
+                    await _addIngredient(
                       Ingredient(
                         name: name,
                         stockInBaseUnit: stockInBaseUnit,
@@ -611,10 +646,7 @@ class _ManageIngredientsPageState extends State<ManageIngredientsPage> {
                 Navigator.pop(ctx);
 
                 try {
-                  await _ingredientController.restockIngredient(
-                    ingredient.id!,
-                    amountInBaseUnit,
-                  );
+                  await _restockIngredient(ingredient.id!, amountInBaseUnit);
                   _showSnackBar(
                     "Berhasil menambah ${_formatDouble(inputAmount)} $selectedUnit",
                   );
@@ -678,7 +710,7 @@ class _ManageIngredientsPageState extends State<ManageIngredientsPage> {
             onPressed: () async {
               Navigator.pop(ctx);
               try {
-                await _ingredientController.deleteIngredient(ingredient.id!);
+                await _deleteIngredient(ingredient.id!);
                 _showSnackBar("Bahan berhasil dihapus");
               } catch (e) {
                 _showSnackBar("Error: $e", isError: true);

@@ -5,23 +5,30 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../core/constants/app_colors.dart';
 import '../../core/models/product_model.dart';
 import '../../core/services/product_controller.dart';
-import '../transaction/qris_dialog.dart';
+import '../../core/services/mock_product_controller.dart';
+import '../../core/services/preview_mode_controller.dart';
+import '../../core/widgets/preview_mode_banner.dart';
+import '../transaction/payment_dialog.dart';
 import '../auth/login_page.dart';
+import '../settings/printer_settings_page.dart';
 
-class CashierDashboard extends StatefulWidget {
-  const CashierDashboard({super.key});
+class CrewDashboard extends StatefulWidget {
+  const CrewDashboard({super.key});
 
   @override
-  State<CashierDashboard> createState() => _CashierDashboardState();
+  State<CrewDashboard> createState() => _CrewDashboardState();
 }
 
-class _CashierDashboardState extends State<CashierDashboard> {
+class _CrewDashboardState extends State<CrewDashboard> {
   final ProductController _productController = ProductController();
+  final MockProductController _mockProductController = MockProductController();
   final List<Product> _localProducts = [];
 
   // User data
-  String _displayName = 'Barista';
+  String _displayName = 'Crew';
   String _userEmail = '';
+
+  bool get _isPreviewMode => PreviewModeController.instance.isPreviewMode;
 
   @override
   void initState() {
@@ -29,8 +36,15 @@ class _CashierDashboardState extends State<CashierDashboard> {
     _loadUserData();
   }
 
-  /// Load user data from Firestore
+  /// Load user data from Firestore (skip in preview mode)
   Future<void> _loadUserData() async {
+    if (_isPreviewMode) {
+      setState(() {
+        _displayName = 'Demo Kasir';
+        _userEmail = 'demo@siniops.id';
+      });
+      return;
+    }
     try {
       final user = FirebaseAuth.instance.currentUser;
       if (user != null) {
@@ -40,13 +54,13 @@ class _CashierDashboardState extends State<CashierDashboard> {
             .get();
         if (doc.exists && mounted) {
           setState(() {
-            _displayName = doc.data()?['displayName'] ?? 'Barista';
+            _displayName = doc.data()?['displayName'] ?? 'Crew';
             _userEmail = doc.data()?['email'] ?? user.email ?? '';
           });
         }
       }
     } catch (e) {
-      debugPrint('[CashierDashboard] Error loading user data: $e');
+      debugPrint('[CrewDashboard] Error loading user data: $e');
     }
   }
 
@@ -110,143 +124,152 @@ class _CashierDashboardState extends State<CashierDashboard> {
       backgroundColor: AppColors.background,
       appBar: _buildAppBar(),
       bottomNavigationBar: _buildBottomBar(),
-      body: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 1200),
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(24, 16, 24, 120),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Sapaan with formatted name
-              Text(
-                "Halo, ${_formatDisplayName(_displayName)}!",
-                style: GoogleFonts.dongle(
-                  fontSize: 42,
-                  fontWeight: FontWeight.bold,
-                  color: AppColors.primary,
-                  height: 1,
-                ),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                "Siap mencatat transaksi hari ini?",
-                style: GoogleFonts.lexendDeca(
-                  color: AppColors.textSecondary,
-                  fontSize: 14,
-                ),
-              ),
-              const SizedBox(height: 24),
-
-              // Header Menu
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(
-                    "Menu Kopi",
-                    style: GoogleFonts.lexendDeca(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                      color: AppColors.primary,
-                    ),
-                  ),
-                  // Reset cart button
-                  if (_totalItems > 0)
-                    TextButton.icon(
-                      onPressed: _resetCart,
-                      icon: const Icon(Icons.refresh, size: 18),
-                      label: const Text("Reset"),
-                      style: TextButton.styleFrom(
-                        foregroundColor: AppColors.textSecondary,
+      body: Column(
+        children: [
+          const PreviewModeBanner(),
+          Expanded(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 1200),
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(24, 16, 24, 120),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Sapaan with formatted name
+                    Text(
+                      "Halo, ${_formatDisplayName(_displayName)}!",
+                      style: GoogleFonts.dongle(
+                        fontSize: 42,
+                        fontWeight: FontWeight.bold,
+                        color: AppColors.primary,
+                        height: 1,
                       ),
                     ),
-                ],
-              ),
-              const SizedBox(height: 16),
-
-              // Product List with StreamBuilder
-              StreamBuilder<List<Product>>(
-                stream: _productController.getProducts(),
-                builder: (context, snapshot) {
-                  if (snapshot.hasError) {
-                    return Center(
-                      child: Padding(
-                        padding: const EdgeInsets.all(32.0),
-                        child: Text(
-                          "Error: ${snapshot.error}",
-                          style: const TextStyle(color: AppColors.error),
-                        ),
+                    const SizedBox(height: 4),
+                    Text(
+                      "Siap mencatat transaksi hari ini?",
+                      style: GoogleFonts.lexendDeca(
+                        color: AppColors.textSecondary,
+                        fontSize: 14,
                       ),
-                    );
-                  }
+                    ),
+                    const SizedBox(height: 24),
 
-                  if (!snapshot.hasData) {
-                    return const Center(
-                      child: Padding(
-                        padding: EdgeInsets.all(32.0),
-                        child: CircularProgressIndicator(
-                          color: AppColors.primary,
+                    // Header Menu
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          "Menu Kopi",
+                          style: GoogleFonts.lexendDeca(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                            color: AppColors.primary,
+                          ),
                         ),
-                      ),
-                    );
-                  }
+                        // Reset cart button
+                        if (_totalItems > 0)
+                          TextButton.icon(
+                            onPressed: _resetCart,
+                            icon: const Icon(Icons.refresh, size: 18),
+                            label: const Text("Reset"),
+                            style: TextButton.styleFrom(
+                              foregroundColor: AppColors.textSecondary,
+                            ),
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
 
-                  final products = snapshot.data!;
-                  if (products.isEmpty) {
-                    return Center(
-                      child: Padding(
-                        padding: const EdgeInsets.all(32.0),
-                        child: Column(
-                          children: [
-                            Icon(
-                              Icons.coffee_outlined,
-                              size: 64,
-                              color: AppColors.textSecondary.withValues(
-                                alpha: 0.5,
+                    // Product List with StreamBuilder
+                    StreamBuilder<List<Product>>(
+                      stream: _isPreviewMode
+                          ? _mockProductController.getProducts()
+                          : _productController.getProducts(),
+                      builder: (context, snapshot) {
+                        if (snapshot.hasError) {
+                          return Center(
+                            child: Padding(
+                              padding: const EdgeInsets.all(32.0),
+                              child: Text(
+                                "Error: ${snapshot.error}",
+                                style: const TextStyle(color: AppColors.error),
                               ),
                             ),
-                            const SizedBox(height: 16),
-                            Text(
-                              "Belum ada menu",
-                              style: GoogleFonts.lexendDeca(
-                                color: AppColors.textSecondary,
-                                fontSize: 16,
+                          );
+                        }
+
+                        if (!snapshot.hasData) {
+                          return const Center(
+                            child: Padding(
+                              padding: EdgeInsets.all(32.0),
+                              child: CircularProgressIndicator(
+                                color: AppColors.primary,
                               ),
                             ),
-                          ],
-                        ),
-                      ),
-                    );
-                  }
+                          );
+                        }
 
-                  // Sync local state
-                  for (var product in products) {
-                    final existing = _localProducts.where(
-                      (p) => p.id == product.id,
-                    );
-                    if (existing.isEmpty) {
-                      _localProducts.add(product);
-                    }
-                  }
+                        final products = snapshot.data!;
+                        if (products.isEmpty) {
+                          return Center(
+                            child: Padding(
+                              padding: const EdgeInsets.all(32.0),
+                              child: Column(
+                                children: [
+                                  Icon(
+                                    Icons.coffee_outlined,
+                                    size: 64,
+                                    color: AppColors.textSecondary.withValues(
+                                      alpha: 0.5,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 16),
+                                  Text(
+                                    "Belum ada menu",
+                                    style: GoogleFonts.lexendDeca(
+                                      color: AppColors.textSecondary,
+                                      fontSize: 16,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          );
+                        }
 
-                  // Remove products that no longer exist
-                  _localProducts.removeWhere(
-                    (local) => !products.any((p) => p.id == local.id),
-                  );
+                        // Sync local state
+                        for (var product in products) {
+                          final existing = _localProducts.where(
+                            (p) => p.id == product.id,
+                          );
+                          if (existing.isEmpty) {
+                            _localProducts.add(product);
+                          }
+                        }
 
-                  return ListView.builder(
-                    shrinkWrap: true,
-                    physics: const NeverScrollableScrollPhysics(),
-                    itemCount: _localProducts.length,
-                    itemBuilder: (context, index) {
-                      final product = _localProducts[index];
-                      return _buildProductCard(product);
-                    },
-                  );
-                },
+                        // Remove products that no longer exist
+                        _localProducts.removeWhere(
+                          (local) => !products.any((p) => p.id == local.id),
+                        );
+
+                        return ListView.builder(
+                          shrinkWrap: true,
+                          physics: const NeverScrollableScrollPhysics(),
+                          itemCount: _localProducts.length,
+                          itemBuilder: (context, index) {
+                            final product = _localProducts[index];
+                            return _buildProductCard(product);
+                          },
+                        );
+                      },
+                    ),
+                  ],
+                ),
               ),
-            ],
+            ),
           ),
-        ),
+        ],
       ),
     );
   }
@@ -451,8 +474,17 @@ class _CashierDashboardState extends State<CashierDashboard> {
             size: 22,
           ),
           onSelected: (val) {
-            if (val == 'logout') {
-              FirebaseAuth.instance.signOut();
+            if (val == 'settings') {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const PrinterSettingsPage()),
+              );
+            } else if (val == 'logout') {
+              if (_isPreviewMode) {
+                PreviewModeController.instance.exitPreviewMode();
+              } else {
+                FirebaseAuth.instance.signOut();
+              }
               Navigator.pushReplacement(
                 context,
                 MaterialPageRoute(builder: (_) => const LoginPage()),
@@ -478,6 +510,24 @@ class _CashierDashboardState extends State<CashierDashboard> {
                       fontSize: 12,
                       color: AppColors.textSecondary,
                     ),
+                  ),
+                ],
+              ),
+            ),
+            const PopupMenuDivider(),
+            PopupMenuItem(
+              value: 'settings',
+              child: Row(
+                children: [
+                  const Icon(
+                    Icons.settings_outlined,
+                    color: AppColors.textSecondary,
+                    size: 20,
+                  ),
+                  const SizedBox(width: 12),
+                  Text(
+                    "Pengaturan Printer",
+                    style: GoogleFonts.lexendDeca(color: AppColors.textPrimary),
                   ),
                 ],
               ),
@@ -562,18 +612,22 @@ class _CashierDashboardState extends State<CashierDashboard> {
                             .toList();
                         showDialog(
                           context: context,
-                          builder: (context) => QrisDialog(
+                          builder: (context) => PaymentDialog(
                             amount: _totalPrice,
                             cartItems: itemsToCheckout,
+                            staffUid: FirebaseAuth.instance.currentUser?.uid,
+                            staffName: _formatDisplayName(_displayName),
                           ),
-                        ).then((_) {
-                          // Reset cart after dialog closes if transaction was successful
-                          // The dialog handles its own state
+                        ).then((result) {
+                          // Reset cart if transaction was successful
+                          if (result == true) {
+                            _resetCart();
+                          }
                         });
                       }
                     : null,
-                icon: const Icon(Icons.qr_code_2_rounded),
-                label: const Text("Bayar QRIS"),
+                icon: const Icon(Icons.payments_outlined),
+                label: const Text("Bayar"),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: AppColors.primary,
                   foregroundColor: Colors.white,

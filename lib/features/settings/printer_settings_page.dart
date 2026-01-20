@@ -1,7 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:blue_thermal_printer/blue_thermal_printer.dart';
+import 'package:permission_handler/permission_handler.dart';
 import '../../core/constants/app_colors.dart';
 import '../../core/services/printer_service.dart';
 
@@ -15,13 +15,13 @@ class PrinterSettingsPage extends StatefulWidget {
 class _PrinterSettingsPageState extends State<PrinterSettingsPage> {
   final PrinterService _printerService = PrinterService.instance;
 
-  List<BluetoothDevice> _devices = [];
+  List<PrinterDevice> _devices = [];
   bool _isScanning = false;
   bool _isConnecting = false;
-  bool _isPrinting = false;
   bool _isSavingWifi = false;
   bool _isSavingAddress = false;
   String? _errorMessage;
+  String? _connectionStatus;
 
   // Wi-Fi footer settings controllers
   final TextEditingController _ssidController = TextEditingController();
@@ -33,7 +33,7 @@ class _PrinterSettingsPageState extends State<PrinterSettingsPage> {
   void initState() {
     super.initState();
     if (!kIsWeb) {
-      _checkBluetoothAndScan();
+      _initializePrinter();
     }
     _loadSettings();
   }
@@ -44,6 +44,48 @@ class _PrinterSettingsPageState extends State<PrinterSettingsPage> {
     _passwordController.dispose();
     _addressController.dispose();
     super.dispose();
+  }
+
+  /// Initialize printer: check permissions and scan
+  Future<void> _initializePrinter() async {
+    // Check Bluetooth availability first
+    final isAvailable = await _printerService.isBluetoothAvailable();
+    if (!isAvailable) {
+      setState(() {
+        _errorMessage =
+            "Bluetooth tidak tersedia atau tidak aktif. Silakan nyalakan Bluetooth.";
+      });
+      return;
+    }
+
+    // Check and request permissions
+    final permissionResult = await _printerService
+        .checkAndRequestBluetoothPermissions();
+
+    if (permissionResult == PermissionResult.granted) {
+      await _scanDevices();
+      await _checkExistingConnection();
+    } else if (permissionResult == PermissionResult.permanentlyDenied) {
+      setState(() {
+        _errorMessage =
+            "Izin Bluetooth ditolak secara permanen. Buka Pengaturan untuk mengizinkan.";
+      });
+    } else {
+      setState(() {
+        _errorMessage = "Izin Bluetooth diperlukan untuk memindai printer.";
+      });
+    }
+  }
+
+  /// Check if already connected
+  Future<void> _checkExistingConnection() async {
+    final isConnected = await _printerService.checkConnection();
+    if (isConnected && mounted) {
+      setState(() {
+        _connectionStatus =
+            "Terhubung ke ${_printerService.connectedDevice?.name ?? 'printer'}";
+      });
+    }
   }
 
   /// Load existing settings from SharedPreferences
@@ -119,24 +161,88 @@ class _PrinterSettingsPageState extends State<PrinterSettingsPage> {
     }
   }
 
-  Future<void> _checkBluetoothAndScan() async {
+  /// Check permissions and scan devices
+  Future<void> _checkPermissionsAndScan() async {
+    setState(() {
+      _errorMessage = null;
+      _connectionStatus = null;
+    });
+
+    // First check Bluetooth availability
     final isAvailable = await _printerService.isBluetoothAvailable();
     if (!isAvailable) {
       setState(() {
-        _errorMessage = "Bluetooth tidak tersedia di perangkat ini";
+        _errorMessage =
+            "Bluetooth tidak tersedia atau tidak aktif. Silakan nyalakan Bluetooth.";
       });
       return;
     }
 
-    final isOn = await _printerService.isBluetoothOn();
-    if (!isOn) {
-      setState(() {
-        _errorMessage = "Bluetooth tidak aktif. Silakan aktifkan Bluetooth.";
-      });
-      return;
-    }
+    // Then check permissions (Dantsu-style)
+    final permissionResult = await _printerService
+        .checkAndRequestBluetoothPermissions();
 
-    await _scanDevices();
+    switch (permissionResult) {
+      case PermissionResult.granted:
+        await _scanDevices();
+        break;
+      case PermissionResult.denied:
+        setState(() {
+          _errorMessage =
+              "Izin Bluetooth diperlukan. Ketuk 'Pindai Ulang' untuk mencoba lagi.";
+        });
+        break;
+      case PermissionResult.permanentlyDenied:
+        _showPermissionSettingsDialog();
+        break;
+    }
+  }
+
+  /// Show dialog for permanently denied permissions
+  void _showPermissionSettingsDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: [
+            Icon(Icons.bluetooth_disabled, color: AppColors.error),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                "Izin Bluetooth Diperlukan",
+                style: GoogleFonts.poppins(
+                  fontWeight: FontWeight.w600,
+                  fontSize: 16,
+                ),
+              ),
+            ),
+          ],
+        ),
+        content: Text(
+          "Izin Bluetooth ditolak secara permanen. Untuk menggunakan printer thermal, "
+          "silakan buka Pengaturan > Aplikasi > SiniOps > Izin, lalu aktifkan izin 'Nearby devices' atau 'Bluetooth'.",
+          style: GoogleFonts.lexendDeca(fontSize: 14),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text("Batal"),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              Navigator.pop(context);
+              // Open app settings using permission_handler
+              await openAppSettings();
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primary,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text("Buka Pengaturan"),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _scanDevices() async {
@@ -151,6 +257,13 @@ class _PrinterSettingsPageState extends State<PrinterSettingsPage> {
         _devices = devices;
         _isScanning = false;
       });
+
+      if (devices.isEmpty) {
+        setState(() {
+          _errorMessage =
+              "Tidak ada printer ditemukan. Pastikan printer sudah di-pair via Bluetooth.";
+        });
+      }
     } catch (e) {
       setState(() {
         _isScanning = false;
@@ -159,26 +272,40 @@ class _PrinterSettingsPageState extends State<PrinterSettingsPage> {
     }
   }
 
-  Future<void> _connectToDevice(BluetoothDevice device) async {
+  Future<void> _connectToDevice(PrinterDevice device) async {
     setState(() {
       _isConnecting = true;
       _errorMessage = null;
+      _connectionStatus = "Menghubungkan ke ${device.name}...";
     });
 
     try {
-      final success = await _printerService.connect(device);
+      // Use retry mechanism for more stable connection
+      final result = await _printerService.connectWithRetry(
+        device,
+        maxRetries: 3,
+      );
+
       setState(() {
         _isConnecting = false;
+        if (result.success) {
+          _connectionStatus = result.message;
+        } else {
+          _connectionStatus = null;
+          _errorMessage = result.message;
+        }
       });
 
-      if (success) {
-        _showSnackBar("Terhubung ke ${device.name}", isError: false);
+      if (result.success) {
+        _showSnackBar("✅ ${result.message}", isError: false);
       } else {
-        _showSnackBar("Gagal terhubung ke ${device.name}", isError: true);
+        _showSnackBar(result.message, isError: true);
       }
     } catch (e) {
       setState(() {
         _isConnecting = false;
+        _connectionStatus = null;
+        _errorMessage = "Error: $e";
       });
       _showSnackBar("Error: $e", isError: true);
     }
@@ -186,37 +313,10 @@ class _PrinterSettingsPageState extends State<PrinterSettingsPage> {
 
   Future<void> _disconnect() async {
     await _printerService.disconnect();
-    setState(() {});
-    _showSnackBar("Printer terputus", isError: false);
-  }
-
-  Future<void> _testPrint() async {
-    if (!_printerService.isConnected) {
-      _showSnackBar("Printer tidak terhubung", isError: true);
-      return;
-    }
-
     setState(() {
-      _isPrinting = true;
+      _connectionStatus = null;
     });
-
-    try {
-      final success = await _printerService.printTestReceipt();
-      setState(() {
-        _isPrinting = false;
-      });
-
-      if (success) {
-        _showSnackBar("✅ Test print berhasil!", isError: false);
-      } else {
-        _showSnackBar("Test print gagal", isError: true);
-      }
-    } catch (e) {
-      setState(() {
-        _isPrinting = false;
-      });
-      _showSnackBar("Error: $e", isError: true);
-    }
+    _showSnackBar("Printer terputus", isError: false);
   }
 
   void _showSnackBar(String message, {required bool isError}) {
@@ -260,7 +360,7 @@ class _PrinterSettingsPageState extends State<PrinterSettingsPage> {
                       child: CircularProgressIndicator(strokeWidth: 2),
                     )
                   : const Icon(Icons.refresh, color: AppColors.primary),
-              onPressed: _isScanning ? null : _scanDevices,
+              onPressed: _isScanning ? null : _checkPermissionsAndScan,
               tooltip: "Pindai Ulang",
             ),
           const SizedBox(width: 8),
@@ -320,19 +420,6 @@ class _PrinterSettingsPageState extends State<PrinterSettingsPage> {
                   subtitle: "Info Wi-Fi yang akan dicetak di struk",
                 ),
                 _buildWifiSettingsSection(),
-
-                const SizedBox(height: 16),
-
-                // --- SECTION 4: Test Print ---
-                if (_printerService.isConnected && !kIsWeb) ...[
-                  _buildSectionHeader(
-                    icon: Icons.print,
-                    title: "Test Print",
-                    subtitle:
-                        "Cetak struk percobaan dengan pengaturan saat ini",
-                  ),
-                  _buildTestPrintSection(),
-                ],
 
                 const SizedBox(height: 32),
               ],
@@ -434,8 +521,24 @@ class _PrinterSettingsPageState extends State<PrinterSettingsPage> {
     final isConnected = _printerService.isConnected;
     final deviceName = _printerService.connectedDevice?.name ?? "Unknown";
 
-    // Use RED for disconnected, GREEN for connected
-    final statusColor = isConnected ? AppColors.success : AppColors.error;
+    // Use RED for disconnected, GREEN for connected, BLUE for connecting
+    Color statusColor;
+    String statusText;
+    IconData statusIcon;
+
+    if (_isConnecting) {
+      statusColor = Colors.blue;
+      statusText = _connectionStatus ?? "Menghubungkan...";
+      statusIcon = Icons.bluetooth_searching;
+    } else if (isConnected) {
+      statusColor = AppColors.success;
+      statusText = "Terhubung";
+      statusIcon = Icons.bluetooth_connected;
+    } else {
+      statusColor = AppColors.error;
+      statusText = "Tidak Terhubung";
+      statusIcon = Icons.bluetooth_disabled;
+    }
 
     return Container(
       width: double.infinity,
@@ -448,27 +551,37 @@ class _PrinterSettingsPageState extends State<PrinterSettingsPage> {
       ),
       child: Row(
         children: [
-          Container(
-            width: 12,
-            height: 12,
-            decoration: BoxDecoration(
-              color: statusColor,
-              shape: BoxShape.circle,
-              boxShadow: [
-                BoxShadow(
-                  color: statusColor.withValues(alpha: 0.4),
-                  blurRadius: 8,
-                ),
-              ],
+          // Animated indicator
+          if (_isConnecting)
+            const SizedBox(
+              width: 12,
+              height: 12,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          else
+            Container(
+              width: 12,
+              height: 12,
+              decoration: BoxDecoration(
+                color: statusColor,
+                shape: BoxShape.circle,
+                boxShadow: [
+                  BoxShadow(
+                    color: statusColor.withValues(alpha: 0.4),
+                    blurRadius: 8,
+                  ),
+                ],
+              ),
             ),
-          ),
           const SizedBox(width: 12),
+          Icon(statusIcon, color: statusColor, size: 20),
+          const SizedBox(width: 8),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  isConnected ? "Terhubung" : "Tidak Terhubung",
+                  statusText,
                   style: GoogleFonts.lexendDeca(
                     fontSize: 14,
                     fontWeight: FontWeight.w600,
@@ -513,6 +626,18 @@ class _PrinterSettingsPageState extends State<PrinterSettingsPage> {
               style: const TextStyle(color: AppColors.error, fontSize: 13),
             ),
           ),
+          // Button to retry or open settings
+          if (_errorMessage!.contains("permanen"))
+            TextButton(
+              onPressed: _showPermissionSettingsDialog,
+              child: Text(
+                "Pengaturan",
+                style: GoogleFonts.lexendDeca(
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.error,
+                ),
+              ),
+            ),
         ],
       ),
     );
@@ -542,7 +667,7 @@ class _PrinterSettingsPageState extends State<PrinterSettingsPage> {
             ),
             const SizedBox(height: 8),
             Text(
-              "Pastikan printer sudah di-pair via Bluetooth",
+              "Pastikan printer sudah di-pair via Pengaturan Bluetooth Android",
               style: GoogleFonts.lexendDeca(
                 fontSize: 13,
                 color: AppColors.textSecondary.withValues(alpha: 0.7),
@@ -552,7 +677,7 @@ class _PrinterSettingsPageState extends State<PrinterSettingsPage> {
             const SizedBox(height: 24),
             if (!_isScanning)
               ElevatedButton.icon(
-                onPressed: _scanDevices,
+                onPressed: _checkPermissionsAndScan,
                 icon: const Icon(Icons.refresh),
                 label: const Text("Pindai Ulang"),
                 style: ElevatedButton.styleFrom(
@@ -573,6 +698,8 @@ class _PrinterSettingsPageState extends State<PrinterSettingsPage> {
         children: _devices.map((device) {
           final isConnected =
               _printerService.connectedDevice?.address == device.address;
+          final isThisConnecting =
+              _isConnecting && _connectionStatus?.contains(device.name) == true;
 
           return Card(
             margin: const EdgeInsets.only(bottom: 12),
@@ -595,19 +722,19 @@ class _PrinterSettingsPageState extends State<PrinterSettingsPage> {
                     ? AppColors.success.withValues(alpha: 0.1)
                     : AppColors.primary.withValues(alpha: 0.1),
                 child: Icon(
-                  Icons.print,
+                  isConnected ? Icons.bluetooth_connected : Icons.print,
                   color: isConnected ? AppColors.success : AppColors.primary,
                 ),
               ),
               title: Text(
-                device.name ?? "Unknown Device",
+                device.name,
                 style: GoogleFonts.lexendDeca(
                   fontWeight: FontWeight.w600,
                   color: AppColors.textPrimary,
                 ),
               ),
               subtitle: Text(
-                device.address ?? "",
+                device.address,
                 style: GoogleFonts.lexendDeca(
                   fontSize: 12,
                   color: AppColors.textSecondary,
@@ -632,7 +759,7 @@ class _PrinterSettingsPageState extends State<PrinterSettingsPage> {
                         ),
                       ),
                     )
-                  : _isConnecting
+                  : isThisConnecting
                   ? const SizedBox(
                       width: 24,
                       height: 24,
@@ -642,7 +769,7 @@ class _PrinterSettingsPageState extends State<PrinterSettingsPage> {
                       Icons.chevron_right,
                       color: AppColors.textSecondary,
                     ),
-              onTap: _isConnecting
+              onTap: (_isConnecting || isThisConnecting)
                   ? null
                   : () {
                       if (isConnected) {
@@ -713,7 +840,7 @@ class _PrinterSettingsPageState extends State<PrinterSettingsPage> {
                     ),
                     focusedBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(10),
-                      borderSide: BorderSide(
+                      borderSide: const BorderSide(
                         color: AppColors.primary,
                         width: 1.5,
                       ),
@@ -816,7 +943,7 @@ class _PrinterSettingsPageState extends State<PrinterSettingsPage> {
                     ),
                     focusedBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(10),
-                      borderSide: BorderSide(
+                      borderSide: const BorderSide(
                         color: AppColors.primary,
                         width: 1.5,
                       ),
@@ -859,7 +986,7 @@ class _PrinterSettingsPageState extends State<PrinterSettingsPage> {
                     ),
                     focusedBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(10),
-                      borderSide: BorderSide(
+                      borderSide: const BorderSide(
                         color: AppColors.primary,
                         width: 1.5,
                       ),
@@ -931,69 +1058,6 @@ class _PrinterSettingsPageState extends State<PrinterSettingsPage> {
                 ),
               ],
             ),
-    );
-  }
-
-  /// Build test print section
-  Widget _buildTestPrintSection() {
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 16),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.05),
-            blurRadius: 10,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Column(
-        children: [
-          Icon(
-            Icons.receipt_long,
-            size: 48,
-            color: AppColors.secondary.withValues(alpha: 0.7),
-          ),
-          const SizedBox(height: 12),
-          Text(
-            "Cetak struk percobaan untuk memastikan\nprinter dan pengaturan berfungsi dengan benar",
-            textAlign: TextAlign.center,
-            style: GoogleFonts.lexendDeca(
-              fontSize: 13,
-              color: AppColors.textSecondary,
-            ),
-          ),
-          const SizedBox(height: 16),
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton.icon(
-              onPressed: _isPrinting ? null : _testPrint,
-              icon: _isPrinting
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: Colors.white,
-                      ),
-                    )
-                  : const Icon(Icons.print),
-              label: Text(_isPrinting ? "Mencetak..." : "🖨️ Test Print"),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.secondary,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 14),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10),
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
     );
   }
 }

@@ -45,10 +45,11 @@ dependencies:
   intl: ^0.20.2
   google_fonts: ^6.3.3
   fl_chart: ^1.1.1
-  blue_thermal_printer: ^1.2.3
+  print_bluetooth_thermal: ^1.1.1
+  esc_pos_utils_plus: ^2.0.4
   path_provider: ^2.1.5
   shared_preferences: ^2.3.5
-  image: ^4.5.6
+  image: ^4.0.17
 
 dev_dependencies:
   flutter_test:

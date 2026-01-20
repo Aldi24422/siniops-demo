@@ -1,12 +1,43 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- Basic Permissions -->
+    <!-- ========== BASIC PERMISSIONS ========== -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <uses-permission android:name="android.permission.INTERNET"/>
     
     <!-- Android 14+ Foreground Service Permission -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
+
+    <!-- ========== BLUETOOTH PERMISSIONS (Dantsu-style) ========== -->
+    <!-- 
+        Permission handling based on Dantsu ESCPOS library:
+        - For Android 11 and below (SDK < 31): Use BLUETOOTH and BLUETOOTH_ADMIN
+        - For Android 12+ (SDK >= 31): Use BLUETOOTH_CONNECT and BLUETOOTH_SCAN
+        - No location permission required with neverForLocation flag
+    -->
+    
+    <!-- Legacy Bluetooth (Android 11 and below) -->
+    <uses-permission 
+        android:name="android.permission.BLUETOOTH" 
+        android:maxSdkVersion="30" />
+    <uses-permission 
+        android:name="android.permission.BLUETOOTH_ADMIN" 
+        android:maxSdkVersion="30" />
+    
+    <!-- New Bluetooth permissions (Android 12+ / SDK 31+) -->
+    <!-- BLUETOOTH_CONNECT: Required to connect to paired Bluetooth devices -->
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <!-- BLUETOOTH_SCAN: Required to discover Bluetooth devices (with neverForLocation) -->
+    <uses-permission 
+        android:name="android.permission.BLUETOOTH_SCAN"
+        android:usesPermissionFlags="neverForLocation"
+        tools:targetApi="s" />
+
+    <!-- Optional: Location permission for devices that still require it for BT scanning -->
+    <!-- Some older devices/ROMs may need this even with neverForLocation -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
     <application
         android:label="siniops"

@@ -4,6 +4,8 @@ import 'package:fl_chart/fl_chart.dart';
 import 'package:intl/intl.dart';
 import '../../core/constants/app_colors.dart';
 import '../../core/services/transaction_controller.dart';
+import 'transaction_history_page.dart';
+import 'widgets/date_range_selector.dart';
 
 class ReportPage extends StatefulWidget {
   const ReportPage({super.key});
@@ -13,32 +15,102 @@ class ReportPage extends StatefulWidget {
 }
 
 class _ReportPageState extends State<ReportPage> {
-  final TransactionController _transactionController = TransactionController();
+  final TransactionController _controller = TransactionController();
 
-  Map<String, double> _weeklyData = {};
+  // Date range state
+  DateTime _startDate = DateTime.now();
+  DateTime _endDate = DateTime.now();
+  DateRangePreset _selectedPreset = DateRangePreset.today;
+
+  // Report data
+  Map<String, double> _chartData = {};
   List<Map<String, dynamic>> _topProducts = [];
+  Map<String, dynamic> _summary = {};
   bool _isLoading = true;
 
   @override
   void initState() {
     super.initState();
+    _initializeDates();
+    _loadData();
+  }
+
+  void _initializeDates() {
+    final now = DateTime.now();
+    _startDate = DateTime(now.year, now.month, now.day);
+    _endDate = DateTime(now.year, now.month, now.day, 23, 59, 59);
+  }
+
+  void _onPresetChanged(DateRangePreset preset) {
+    final now = DateTime.now();
+    DateTime start;
+    DateTime end;
+
+    switch (preset) {
+      case DateRangePreset.today:
+        start = DateTime(now.year, now.month, now.day);
+        end = DateTime(now.year, now.month, now.day, 23, 59, 59);
+        break;
+      case DateRangePreset.thisWeek:
+        final monday = now.subtract(Duration(days: now.weekday - 1));
+        start = DateTime(monday.year, monday.month, monday.day);
+        end = DateTime(now.year, now.month, now.day, 23, 59, 59);
+        break;
+      case DateRangePreset.thisMonth:
+        start = DateTime(now.year, now.month, 1);
+        end = DateTime(now.year, now.month, now.day, 23, 59, 59);
+        break;
+      case DateRangePreset.custom:
+        // Don't change dates for custom, the picker will handle it
+        return;
+    }
+
+    setState(() {
+      _selectedPreset = preset;
+      _startDate = start;
+      _endDate = end;
+    });
+    _loadData();
+  }
+
+  void _onCustomRangeSelected(DateTimeRange range) {
+    setState(() {
+      _selectedPreset = DateRangePreset.custom;
+      _startDate = DateTime(
+        range.start.year,
+        range.start.month,
+        range.start.day,
+      );
+      _endDate = DateTime(
+        range.end.year,
+        range.end.month,
+        range.end.day,
+        23,
+        59,
+        59,
+      );
+    });
     _loadData();
   }
 
   Future<void> _loadData() async {
     setState(() => _isLoading = true);
     try {
-      final weekly = await _transactionController.getWeeklyRevenue();
-      final topProducts = await _transactionController.getTopSellingProducts();
+      final results = await Future.wait([
+        _controller.getRevenueForPeriod(_startDate, _endDate),
+        _controller.getTopProductsForPeriod(_startDate, _endDate),
+        _controller.getSummaryForPeriod(_startDate, _endDate),
+      ]);
 
       setState(() {
-        _weeklyData = weekly;
-        _topProducts = topProducts;
+        _chartData = results[0] as Map<String, double>;
+        _topProducts = results[1] as List<Map<String, dynamic>>;
+        _summary = results[2] as Map<String, dynamic>;
         _isLoading = false;
       });
     } catch (e) {
-      setState(() => _isLoading = false);
       debugPrint('[ReportPage] Error loading data: $e');
+      setState(() => _isLoading = false);
     }
   }
 
@@ -60,6 +132,19 @@ class _ReportPageState extends State<ReportPage> {
     return value.toStringAsFixed(0);
   }
 
+  String _getPeriodLabel() {
+    switch (_selectedPreset) {
+      case DateRangePreset.today:
+        return 'Hari Ini';
+      case DateRangePreset.thisWeek:
+        return 'Minggu Ini';
+      case DateRangePreset.thisMonth:
+        return 'Bulan Ini';
+      case DateRangePreset.custom:
+        return 'Periode Kustom';
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -67,6 +152,8 @@ class _ReportPageState extends State<ReportPage> {
       appBar: AppBar(
         backgroundColor: AppColors.surface,
         elevation: 0,
+        scrolledUnderElevation: 0,
+        surfaceTintColor: Colors.transparent,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_rounded, color: AppColors.primary),
           onPressed: () => Navigator.pop(context),
@@ -92,102 +179,61 @@ class _ReportPageState extends State<ReportPage> {
           child: Container(color: AppColors.accent, height: 1),
         ),
       ),
-      body: _isLoading
-          ? const Center(
-              child: CircularProgressIndicator(color: AppColors.primary),
-            )
-          : RefreshIndicator(
-              onRefresh: _loadData,
-              color: AppColors.primary,
-              child: SingleChildScrollView(
-                physics: const AlwaysScrollableScrollPhysics(),
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // Date Header
-                    _buildDateHeader(),
-                    const SizedBox(height: 20),
-
-                    // Summary Cards
-                    _buildSummaryCards(),
-                    const SizedBox(height: 24),
-
-                    // Weekly Chart Section
-                    _buildSectionHeader(
-                      "Omzet 7 Hari Terakhir",
-                      Icons.bar_chart_rounded,
-                    ),
-                    const SizedBox(height: 12),
-                    _buildWeeklyChart(),
-                    const SizedBox(height: 24),
-
-                    // Top Products Section
-                    _buildSectionHeader("Produk Terlaris", Icons.star_rounded),
-                    const SizedBox(height: 12),
-                    _buildTopProductsList(),
-                    const SizedBox(height: 24),
-
-                    // Recent Transactions Button
-                    _buildRecentTransactionsButton(),
-                    const SizedBox(height: 40),
-                  ],
-                ),
-              ),
-            ),
-    );
-  }
-
-  Widget _buildDateHeader() {
-    final now = DateTime.now();
-    final dateFormat = DateFormat('EEEE, d MMMM yyyy', 'id_ID');
-
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [AppColors.primary, AppColors.primary.withValues(alpha: 0.8)],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-        borderRadius: BorderRadius.circular(16),
-      ),
-      child: Row(
+      body: Column(
         children: [
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.2),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: const Icon(
-              Icons.calendar_today_rounded,
-              color: Colors.white,
-              size: 24,
-            ),
+          // Date Range Selector - Fixed at top
+          DateRangeSelector(
+            startDate: _startDate,
+            endDate: _endDate,
+            selectedPreset: _selectedPreset,
+            onPresetChanged: _onPresetChanged,
+            onCustomRangeSelected: _onCustomRangeSelected,
           ),
-          const SizedBox(width: 16),
+
+          // Scrollable Content
           Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  "Periode Laporan",
-                  style: GoogleFonts.lexendDeca(
-                    color: Colors.white70,
-                    fontSize: 12,
+            child: _isLoading
+                ? const Center(
+                    child: CircularProgressIndicator(color: AppColors.primary),
+                  )
+                : RefreshIndicator(
+                    onRefresh: _loadData,
+                    color: AppColors.primary,
+                    child: SingleChildScrollView(
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          // Summary Cards
+                          _buildSummaryCards(),
+                          const SizedBox(height: 24),
+
+                          // Chart Section
+                          _buildSectionHeader(
+                            "Trend Omzet",
+                            Icons.bar_chart_rounded,
+                          ),
+                          const SizedBox(height: 12),
+                          _buildChart(),
+                          const SizedBox(height: 24),
+
+                          // Top Products Section
+                          _buildSectionHeader(
+                            "Produk Terlaris",
+                            Icons.star_rounded,
+                          ),
+                          const SizedBox(height: 12),
+                          _buildTopProductsList(),
+                          const SizedBox(height: 24),
+
+                          // Transaction History Button
+                          _buildTransactionHistoryButton(),
+                          const SizedBox(height: 40),
+                        ],
+                      ),
+                    ),
                   ),
-                ),
-                Text(
-                  dateFormat.format(now),
-                  style: GoogleFonts.lexendDeca(
-                    color: Colors.white,
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ],
-            ),
           ),
         ],
       ),
@@ -195,38 +241,26 @@ class _ReportPageState extends State<ReportPage> {
   }
 
   Widget _buildSummaryCards() {
+    final totalRevenue = (_summary['totalRevenue'] ?? 0).toDouble();
+    final totalTransactions = _summary['totalTransactions'] ?? 0;
+
     return Row(
       children: [
-        // Today's Revenue Card
         Expanded(
-          child: StreamBuilder<double>(
-            stream: _transactionController.getTodayRevenueStream(),
-            builder: (context, snapshot) {
-              final revenue = snapshot.data ?? 0;
-              return _buildSummaryCard(
-                title: "Omzet Hari Ini",
-                value: _formatRupiah(revenue),
-                icon: Icons.account_balance_wallet_rounded,
-                color: AppColors.success,
-              );
-            },
+          child: _buildSummaryCard(
+            title: "Total Omzet",
+            value: _formatRupiah(totalRevenue),
+            icon: Icons.account_balance_wallet_rounded,
+            color: AppColors.success,
           ),
         ),
         const SizedBox(width: 12),
-
-        // Transaction Count Card
         Expanded(
-          child: StreamBuilder<int>(
-            stream: _transactionController.getTodayTransactionCountStream(),
-            builder: (context, snapshot) {
-              final count = snapshot.data ?? 0;
-              return _buildSummaryCard(
-                title: "Total Transaksi",
-                value: "$count struk",
-                icon: Icons.receipt_long_rounded,
-                color: AppColors.secondary,
-              );
-            },
+          child: _buildSummaryCard(
+            title: "Jumlah Transaksi",
+            value: "$totalTransactions struk",
+            icon: Icons.receipt_long_rounded,
+            color: AppColors.secondary,
           ),
         ),
       ],
@@ -256,17 +290,13 @@ class _ReportPageState extends State<ReportPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: color.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Icon(icon, color: color, size: 20),
-              ),
-            ],
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Icon(icon, color: color, size: 20),
           ),
           const SizedBox(height: 12),
           Text(
@@ -281,7 +311,7 @@ class _ReportPageState extends State<ReportPage> {
             value,
             style: GoogleFonts.dongle(
               color: AppColors.textPrimary,
-              fontSize: 32,
+              fontSize: 28,
               fontWeight: FontWeight.bold,
               height: 1,
             ),
@@ -308,16 +338,18 @@ class _ReportPageState extends State<ReportPage> {
     );
   }
 
-  Widget _buildWeeklyChart() {
-    if (_weeklyData.isEmpty) {
+  Widget _buildChart() {
+    if (_chartData.isEmpty) {
       return _buildEmptyState("Belum ada data transaksi");
     }
 
-    final entries = _weeklyData.entries.toList();
-    final maxValue = _weeklyData.values.fold(0.0, (a, b) => a > b ? a : b);
+    final entries = _chartData.entries.toList();
+    final maxValue = _chartData.values.fold(0.0, (a, b) => a > b ? a : b);
+    final daysDiff = _endDate.difference(_startDate).inDays + 1;
+    final isCompact = daysDiff > 7;
 
     return Container(
-      height: 240,
+      height: 220,
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: AppColors.surface,
@@ -334,12 +366,12 @@ class _ReportPageState extends State<ReportPage> {
               getTooltipColor: (_) => AppColors.primary,
               tooltipBorder: BorderSide.none,
               getTooltipItem: (group, groupIndex, rod, rodIndex) {
-                final value = rod.toY;
+                final key = entries[groupIndex].key;
                 return BarTooltipItem(
-                  _formatRupiah(value),
+                  '$key\n${_formatRupiah(rod.toY)}',
                   GoogleFonts.lexendDeca(
                     color: Colors.white,
-                    fontSize: 12,
+                    fontSize: 11,
                     fontWeight: FontWeight.w600,
                   ),
                 );
@@ -351,22 +383,27 @@ class _ReportPageState extends State<ReportPage> {
             bottomTitles: AxisTitles(
               sideTitles: SideTitles(
                 showTitles: true,
-                reservedSize: 32,
+                reservedSize: 28,
                 getTitlesWidget: (value, meta) {
                   final index = value.toInt();
                   if (index < 0 || index >= entries.length) {
                     return const SizedBox();
                   }
 
-                  final label = entries[index].key.split(
-                    ' ',
-                  )[0]; // Just day name
+                  // For compact charts, show fewer labels
+                  if (isCompact &&
+                      index % 5 != 0 &&
+                      index != entries.length - 1) {
+                    return const SizedBox();
+                  }
+
+                  String label = entries[index].key;
                   return Padding(
                     padding: const EdgeInsets.only(top: 8),
                     child: Text(
                       label,
                       style: GoogleFonts.lexendDeca(
-                        fontSize: 11,
+                        fontSize: isCompact ? 9 : 10,
                         color: AppColors.textSecondary,
                       ),
                     ),
@@ -377,14 +414,14 @@ class _ReportPageState extends State<ReportPage> {
             leftTitles: AxisTitles(
               sideTitles: SideTitles(
                 showTitles: true,
-                reservedSize: 50,
+                reservedSize: 45,
                 getTitlesWidget: (value, meta) {
                   return Padding(
                     padding: const EdgeInsets.only(right: 8),
                     child: Text(
                       _formatCompact(value),
                       style: GoogleFonts.lexendDeca(
-                        fontSize: 10,
+                        fontSize: 9,
                         color: AppColors.textSecondary,
                       ),
                     ),
@@ -409,16 +446,18 @@ class _ReportPageState extends State<ReportPage> {
           borderData: FlBorderData(show: false),
           barGroups: List.generate(entries.length, (index) {
             final value = entries[index].value;
-            final isToday = index == entries.length - 1;
+            final isToday =
+                index == entries.length - 1 &&
+                _selectedPreset != DateRangePreset.custom;
 
             return BarChartGroupData(
               x: index,
               barRods: [
                 BarChartRodData(
                   toY: value,
-                  width: 28,
+                  width: isCompact ? 8 : 20,
                   borderRadius: const BorderRadius.vertical(
-                    top: Radius.circular(6),
+                    top: Radius.circular(4),
                   ),
                   gradient: LinearGradient(
                     colors: isToday
@@ -521,26 +560,25 @@ class _ReportPageState extends State<ReportPage> {
     );
   }
 
-  Widget _buildRecentTransactionsButton() {
+  Widget _buildTransactionHistoryButton() {
     return SizedBox(
       width: double.infinity,
       child: OutlinedButton.icon(
         onPressed: () {
-          // Navigate to transaction history page
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                "Fitur Riwayat Transaksi segera hadir!",
-                style: GoogleFonts.lexendDeca(),
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => TransactionHistoryPage(
+                startDate: _startDate,
+                endDate: _endDate,
+                periodLabel: _getPeriodLabel(),
               ),
-              backgroundColor: AppColors.primary,
-              behavior: SnackBarBehavior.floating,
             ),
           );
         },
         icon: const Icon(Icons.history_rounded),
         label: Text(
-          "Lihat Semua Riwayat Transaksi",
+          "Lihat Riwayat Transaksi",
           style: GoogleFonts.lexendDeca(fontWeight: FontWeight.w600),
         ),
         style: OutlinedButton.styleFrom(

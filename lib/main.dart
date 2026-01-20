@@ -7,7 +7,7 @@ import 'core/constants/app_colors.dart';
 import 'core/services/auth_controller.dart';
 import 'features/auth/login_page.dart';
 import 'features/dashboard/owner_dashboard.dart';
-import 'features/dashboard/cashier_dashboard.dart';
+import 'features/dashboard/crew_dashboard.dart';
 import 'firebase_options.dart';
 
 void main() async {
@@ -154,10 +154,10 @@ class AuthGate extends StatelessWidget {
 
               final role = roleSnapshot.data;
 
-              if (role == 'owner') {
+              if (role == 'owner' || role == 'outlet_manager') {
                 return const OwnerDashboard();
-              } else if (role == 'cashier') {
-                return const CashierDashboard();
+              } else if (role == 'crew') {
+                return const CrewDashboard();
               } else {
                 // Unknown role or error - go to login
                 return const LoginPage();

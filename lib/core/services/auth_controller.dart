@@ -33,7 +33,7 @@ class AuthController {
   }
 
   /// Get user role from Firestore 'users' collection
-  /// Returns 'owner', 'cashier', or null if not found
+  /// Returns 'owner', 'outlet_manager', 'crew', or null if not found
   Future<String?> getUserRole(String uid) async {
     try {
       final doc = await _firestore.collection('users').doc(uid).get();
@@ -66,12 +66,18 @@ class AuthController {
   // STAFF MANAGEMENT METHODS
   // ============================================================
 
-  /// Add a new cashier without logging out the current owner
+  /// Send password reset email
+  Future<void> sendPasswordResetEmail(String email) async {
+    await _auth.sendPasswordResetEmail(email: email.trim());
+  }
+
+  /// Add a new staff member (crew or outlet_manager)
   /// Uses Secondary Firebase App to avoid session disruption
-  Future<AddCashierResult> addCashier({
+  Future<AddStaffResult> addStaff({
     required String email,
     required String password,
     required String name,
+    String role = 'crew',
   }) async {
     FirebaseApp? secondaryApp;
 
@@ -92,24 +98,24 @@ class AuthController {
       );
 
       if (credential.user == null) {
-        return AddCashierResult(success: false, error: 'Gagal membuat akun');
+        return AddStaffResult(success: false, error: 'Gagal membuat akun');
       }
 
       // Save user data to Firestore
       await _firestore.collection('users').doc(credential.user!.uid).set({
         'email': email.trim(),
         'displayName': name.trim(),
-        'role': 'cashier',
+        'role': role,
         'isActive': true,
         'createdAt': FieldValue.serverTimestamp(),
         'createdBy': currentUser?.uid,
       });
 
-      debugPrint('[AuthController] Cashier created: $email');
+      debugPrint('[AuthController] Staff created: $email');
 
-      return AddCashierResult(success: true, uid: credential.user!.uid);
+      return AddStaffResult(success: true, uid: credential.user!.uid);
     } on FirebaseAuthException catch (e) {
-      debugPrint('[AuthController] Add cashier error: ${e.code}');
+      debugPrint('[AuthController] Add staff error: ${e.code}');
       String errorMessage = 'Gagal membuat akun';
 
       switch (e.code) {
@@ -124,10 +130,10 @@ class AuthController {
           break;
       }
 
-      return AddCashierResult(success: false, error: errorMessage);
+      return AddStaffResult(success: false, error: errorMessage);
     } catch (e) {
-      debugPrint('[AuthController] Add cashier error: $e');
-      return AddCashierResult(success: false, error: e.toString());
+      debugPrint('[AuthController] Add staff error: $e');
+      return AddStaffResult(success: false, error: e.toString());
     } finally {
       // Clean up secondary app
       if (secondaryApp != null) {
@@ -140,162 +146,177 @@ class AuthController {
     }
   }
 
-  /// Get stream of all cashiers from Firestore
-  /// Note: Sorting done client-side to avoid composite index requirement
-  Stream<List<CashierData>> getCashiers() {
+  /// Get stream of all staff (crew & outlet_manager) from Firestore
+  Stream<List<StaffData>> getStaff(String currentUserRole) {
+    // Default allowed roles for outlet_manager (can view managers, crew, and legacy cashier)
+    List<String> allowedRoles = ['outlet_manager', 'crew', 'cashier'];
+
+    if (currentUserRole == 'owner') {
+      // Owner can view everyone including other owners
+      allowedRoles = ['owner', 'outlet_manager', 'crew', 'cashier'];
+    }
+
     return _firestore
         .collection('users')
-        .where('role', isEqualTo: 'cashier')
+        .where('role', whereIn: allowedRoles)
         .snapshots()
         .map((snapshot) {
-          final cashiers = snapshot.docs.map((doc) {
+          final staffList = snapshot.docs.map((doc) {
             final data = doc.data();
-            return CashierData(
+            return StaffData(
               uid: doc.id,
               email: data['email'] ?? '',
               displayName: data['displayName'] ?? 'Unknown',
+              role: data['role'] ?? 'crew',
               isActive: data['isActive'] ?? true,
               createdAt: (data['createdAt'] as Timestamp?)?.toDate(),
             );
           }).toList();
 
           // Sort client-side: newest first
-          cashiers.sort((a, b) {
+          staffList.sort((a, b) {
             if (a.createdAt == null && b.createdAt == null) return 0;
             if (a.createdAt == null) return 1;
             if (b.createdAt == null) return -1;
             return b.createdAt!.compareTo(a.createdAt!);
           });
 
-          return cashiers;
+          return staffList;
         });
   }
 
-  /// Deactivate a cashier (soft delete)
-  /// Sets isActive to false in Firestore
-  Future<bool> deleteCashier(String uid) async {
+  /// Delete staff permanently (Hard Delete)
+  /// Only deletes Firestore data. Auth deletion requires Admin SDK or Cloud Functions.
+  /// Without Firestore data, user cannot login.
+  Future<bool> deleteStaff(String uid) async {
     try {
-      await _firestore.collection('users').doc(uid).update({
-        'isActive': false,
-        'deactivatedAt': FieldValue.serverTimestamp(),
-        'deactivatedBy': currentUser?.uid,
-      });
-      debugPrint('[AuthController] Cashier deactivated: $uid');
+      await _firestore.collection('users').doc(uid).delete();
+      debugPrint('[AuthController] Staff deleted: $uid');
       return true;
     } catch (e) {
-      debugPrint('[AuthController] Delete cashier error: $e');
+      debugPrint('[AuthController] Delete staff error: $e');
       return false;
     }
   }
 
-  /// Reactivate a previously deactivated cashier
-  Future<bool> reactivateCashier(String uid) async {
+  // --- Owner Deletion Request System ---
+
+  /// Request deletion of another owner
+  Future<bool> requestOwnerDeletion(String targetUid) async {
+    try {
+      final requesterUid = currentUser?.uid;
+      if (requesterUid == null) return false;
+
+      // Check if request already exists
+      final existing = await _firestore
+          .collection('deletion_requests')
+          .where('targetUid', isEqualTo: targetUid)
+          .where('requesterUid', isEqualTo: requesterUid)
+          .where('status', isEqualTo: 'pending')
+          .get();
+
+      if (existing.docs.isNotEmpty) return true; // Already requested
+
+      await _firestore.collection('deletion_requests').add({
+        'targetUid': targetUid,
+        'requesterUid': requesterUid,
+        'status': 'pending',
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+      return true;
+    } catch (e) {
+      debugPrint('[AuthController] Request deletion error: $e');
+      return false;
+    }
+  }
+
+  /// Get stream of deletion requests for the current user
+  Stream<QuerySnapshot> getDeletionRequestsStream() {
+    final myUid = currentUser?.uid;
+    if (myUid == null) return const Stream.empty();
+
+    return _firestore
+        .collection('deletion_requests')
+        .where('targetUid', isEqualTo: myUid)
+        .where('status', isEqualTo: 'pending')
+        .snapshots();
+  }
+
+  /// Approve deletion request (I agree to delete MY account)
+  Future<void> approveOwnerDeletion(String requestId) async {
+    final myUid = currentUser?.uid;
+    if (myUid == null) return;
+
+    try {
+      await _firestore.runTransaction((transaction) async {
+        // 1. Delete my user data
+        final userRef = _firestore.collection('users').doc(myUid);
+        transaction.delete(userRef);
+
+        // 2. Delete the request
+        final requestRef = _firestore
+            .collection('deletion_requests')
+            .doc(requestId);
+        transaction.delete(requestRef);
+      });
+
+      // 3. Sign out
+      await signOut();
+    } catch (e) {
+      debugPrint('[AuthController] Approve deletion error: $e');
+      rethrow;
+    }
+  }
+
+  /// Reject deletion request
+  Future<void> rejectOwnerDeletion(String requestId) async {
+    try {
+      await _firestore.collection('deletion_requests').doc(requestId).delete();
+    } catch (e) {
+      debugPrint('[AuthController] Reject deletion error: $e');
+    }
+  }
+
+  /// Reactivate a previously deactivated staff member
+  Future<bool> reactivateStaff(String uid) async {
     try {
       await _firestore.collection('users').doc(uid).update({
         'isActive': true,
         'reactivatedAt': FieldValue.serverTimestamp(),
         'reactivatedBy': currentUser?.uid,
       });
-      debugPrint('[AuthController] Cashier reactivated: $uid');
+      debugPrint('[AuthController] Staff reactivated: $uid');
       return true;
     } catch (e) {
-      debugPrint('[AuthController] Reactivate cashier error: $e');
+      debugPrint('[AuthController] Reactivate staff error: $e');
       return false;
     }
   }
-
-  // ============================================================
-  // SEED DEFAULT USERS
-  // ============================================================
-
-  /// Seed default demo users (owner & kasir)
-  /// Creates both Firebase Auth accounts and Firestore user documents
-  Future<SeedResult> seedDefaultUsers() async {
-    int created = 0;
-    int skipped = 0;
-    List<String> errors = [];
-
-    // Default users configuration
-    final defaultUsers = [
-      {
-        'email': 'owner@siniops.com',
-        'password': '123456',
-        'role': 'owner',
-        'displayName': 'Owner Coffee',
-      },
-      {
-        'email': 'kasir@siniops.com',
-        'password': '123456',
-        'role': 'cashier',
-        'displayName': 'Staff Barista',
-      },
-    ];
-
-    for (final userData in defaultUsers) {
-      try {
-        // Try to create user in Firebase Auth
-        final credential = await _auth.createUserWithEmailAndPassword(
-          email: userData['email']!,
-          password: userData['password']!,
-        );
-
-        // Create Firestore document
-        if (credential.user != null) {
-          await _firestore.collection('users').doc(credential.user!.uid).set({
-            'email': userData['email'],
-            'role': userData['role'],
-            'displayName': userData['displayName'],
-            'isActive': true,
-            'createdAt': FieldValue.serverTimestamp(),
-          });
-          created++;
-          debugPrint('[AuthController] Created user: ${userData['email']}');
-        }
-      } on FirebaseAuthException catch (e) {
-        if (e.code == 'email-already-in-use') {
-          skipped++;
-          debugPrint(
-            '[AuthController] User already exists: ${userData['email']}',
-          );
-        } else {
-          errors.add('${userData['email']}: ${e.message}');
-          debugPrint(
-            '[AuthController] Error creating ${userData['email']}: ${e.code}',
-          );
-        }
-      } catch (e) {
-        errors.add('${userData['email']}: $e');
-      }
-    }
-
-    // Sign out after seeding (so user can login fresh)
-    await _auth.signOut();
-
-    return SeedResult(created: created, skipped: skipped, errors: errors);
-  }
 }
 
-/// Result of addCashier operation
-class AddCashierResult {
+/// Result of addStaff operation
+class AddStaffResult {
   final bool success;
   final String? uid;
   final String? error;
 
-  AddCashierResult({required this.success, this.uid, this.error});
+  AddStaffResult({required this.success, this.uid, this.error});
 }
 
-/// Cashier data model
-class CashierData {
+/// Staff data model
+class StaffData {
   final String uid;
   final String email;
   final String displayName;
+  final String role;
   final bool isActive;
   final DateTime? createdAt;
 
-  CashierData({
+  StaffData({
     required this.uid,
     required this.email,
     required this.displayName,
+    required this.role,
     required this.isActive,
     this.createdAt,
   });
