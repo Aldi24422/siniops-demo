@@ -4,14 +4,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:qr_flutter/qr_flutter.dart';
-import 'package:flutter_notification_listener/flutter_notification_listener.dart';
 import '../../core/constants/app_colors.dart';
 import '../../core/constants/app_constants.dart';
 import '../../core/models/product_model.dart';
-import '../../core/services/notification_controller.dart';
-import '../../core/services/transaction_controller.dart';
 import '../../core/services/mock_transaction_controller.dart';
-import '../../core/services/preview_mode_controller.dart';
 import '../../core/services/printer_service.dart';
 import '../receipt/receipt_preview_widget.dart';
 
@@ -91,11 +87,9 @@ class _PaymentDialogState extends State<PaymentDialog>
   bool _isLoading = false;
   bool _isDisposed = false;
 
-  // QRIS Tab State (PRESERVED FROM ORIGINAL)
-  String _debugLog = "Silakan scan QR code untuk membayar";
-  StreamSubscription<NotificationEvent>? _subscription;
-  Timer? _timeoutTimer;
-  bool _isReturningFromSettings = false;
+  // QRIS Tab State (DEMO MODE - simulated detection)
+  String _debugLog = "Demo Mode: Pembayaran akan otomatis terdeteksi";
+  Timer? _demoDetectionTimer;
   bool _autoPrint = true;
 
   // Cash Tab State
@@ -105,15 +99,9 @@ class _PaymentDialogState extends State<PaymentDialog>
   bool get _isCashSufficient => _cashReceived >= widget.amount;
 
   // Controllers
-  final TransactionController _transactionController = TransactionController();
   final MockTransactionController _mockTransactionController =
       MockTransactionController();
   final PrinterService _printerService = PrinterService.instance;
-
-  bool get _isPreviewMode => PreviewModeController.instance.isPreviewMode;
-
-  /// Detection timeout duration - show manual validation after this
-  static const Duration _detectionTimeout = Duration(minutes: 5);
 
   @override
   void initState() {
@@ -128,346 +116,46 @@ class _PaymentDialogState extends State<PaymentDialog>
     _isDisposed = true;
     _tabController.dispose();
     _cashReceivedController.dispose();
-    WidgetsBinding.instance.removeObserver(this);
-    _timeoutTimer?.cancel();
-    _stopListening();
+    _demoDetectionTimer?.cancel();
     super.dispose();
   }
 
   // ============================================================
-  // NOTIFICATION LISTENER LOGIC (PRESERVED 100% FROM ORIGINAL)
+  // DEMO MODE: SIMULATED QRIS DETECTION
   // ============================================================
 
-  /// Handle app lifecycle changes - crucial for returning from Settings
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    super.didChangeAppLifecycleState(state);
-
-    if (state == AppLifecycleState.paused) {
-      // User is leaving the app (possibly to Settings)
-      _isReturningFromSettings = true;
-      debugPrint(
-        '[PaymentDialog] App paused, marking for potential Settings return',
-      );
-    } else if (state == AppLifecycleState.resumed && _isReturningFromSettings) {
-      // User returned from Settings or background
-      _isReturningFromSettings = false;
-      debugPrint(
-        '[PaymentDialog] App resumed, attempting to reinitialize listener',
-      );
-      _handleResumeFromSettings();
-    }
-  }
-
-  /// Safe re-initialization after returning from Settings
-  Future<void> _handleResumeFromSettings() async {
-    if (!mounted || _isDisposed) return;
-
+  /// In demo mode, simulate QRIS auto-detection after a short delay
+  void _startDemoQrisDetection() {
+    _demoDetectionTimer?.cancel();
     setState(() {
-      _debugLog = "Memeriksa izin notifikasi...";
+      _debugLog = "Demo Mode: Mendeteksi pembayaran QRIS...";
     });
 
-    try {
-      final success = await NotificationController.instance
-          .reinitializeIfNeeded();
-
+    // Simulate auto-detection after 3 seconds
+    _demoDetectionTimer = Timer(const Duration(seconds: 3), () {
       if (!mounted || _isDisposed) return;
-
-      if (success) {
-        // Re-subscribe to stream if not already subscribed
-        _subscription ??= NotificationController.instance.notificationStream
-            .listen(
-              (event) => _processNotification(event),
-              onError: (error) {
-                debugPrint('[PaymentDialog] Stream error after resume: $error');
-              },
-            );
-
-        setState(() {
-          _debugLog = "✅ Siap menerima pembayaran...";
-        });
-
-        // Restart timeout timer
-        _startTimeoutTimer();
-      } else {
-        setState(() {
-          _debugLog =
-              "Permission belum diberikan.\nSilakan aktifkan akses notifikasi di Settings.";
-        });
-      }
-    } catch (e) {
-      debugPrint('[PaymentDialog] Error in _handleResumeFromSettings: $e');
-      if (mounted && !_isDisposed) {
-        setState(() {
-          _debugLog = "Error saat memeriksa izin: $e";
-        });
-      }
-    }
-  }
-
-  void _startListening() async {
-    try {
-      // 1. Initialize Service (async, returns success status)
-      final success = await NotificationController.instance.startListening();
-
-      if (!success) {
-        if (mounted && !_isDisposed) {
-          setState(() {
-            _debugLog =
-                "Permission belum diberikan. Silakan aktifkan akses notifikasi.";
-          });
-        }
-        return;
-      }
-
-      // 2. Listen to Stream with error handling
-      _subscription = NotificationController.instance.notificationStream.listen(
-        (event) {
-          debugPrint(
-            '[PaymentDialog] Stream received event: ${event.packageName} - ${event.title}',
-          );
-          _processNotification(event);
-        },
-        onError: (error) {
-          debugPrint('[PaymentDialog] Stream error: $error');
-          if (mounted && !_isDisposed) {
-            setState(() {
-              _debugLog = "Error: $error";
-            });
-          }
-        },
-        onDone: () {
-          debugPrint('[PaymentDialog] Stream is DONE/CLOSED');
-        },
-      );
-
-      // 3. Start timeout timer
-      _startTimeoutTimer();
-
-      if (mounted && !_isDisposed) {
-        setState(() {
-          _debugLog = "Siap menerima pembayaran...";
-        });
-      }
-    } catch (e, stack) {
-      // CRITICAL: Catch any native/plugin crash and prevent app crash
-      debugPrint('[PaymentDialog] CRITICAL ERROR in _startListening: $e');
-      debugPrint('$stack');
-
-      if (mounted && !_isDisposed) {
-        setState(() {
-          _debugLog =
-              "Error inisialisasi listener: $e\nGunakan validasi manual.";
-        });
-
-        // Show snackbar to inform user
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              "⚠️ Listener gagal dimulai. Gunakan validasi manual.",
-            ),
-            backgroundColor: Colors.orange,
-            behavior: SnackBarBehavior.floating,
-            duration: const Duration(seconds: 4),
-          ),
-        );
-      }
-    }
-  }
-
-  void _startTimeoutTimer() {
-    _timeoutTimer?.cancel();
-    _timeoutTimer = Timer(_detectionTimeout, () {
-      if (mounted && !_isDisposed) {
-        setState(() {
-          _debugLog =
-              "Timeout: Tidak ada pembayaran terdeteksi dalam 5 menit.\nGunakan validasi manual jika sudah membayar.";
-        });
-      }
-    });
-  }
-
-  Future<void> _stopListening() async {
-    await _subscription?.cancel();
-    _subscription = null;
-    // Note: Don't stop the controller here as other dialogs might use it
-  }
-
-  /// Process incoming notification with improved currency parsing.
-  void _processNotification(NotificationEvent event) {
-    if (!mounted || _isDisposed) return;
-
-    final String packageName = event.packageName ?? "";
-    final String title = event.title ?? "";
-    final String body = event.text ?? "";
-
-    // Filter Loop (Abaikan notif dari aplikasi sendiri)
-    if (packageName.contains("siniops")) return;
-
-    // Don't show raw package name to user - just log for debugging
-    debugPrint(
-      '[PaymentDialog] Notification from: $packageName - $title - $body',
-    );
-
-    // Parse currency amounts from text with improved regex
-    final List<double> amountsInBody = _extractCurrencyAmounts(body);
-    final List<double> amountsInTitle = _extractCurrencyAmounts(title);
-    final double targetAmount = widget.amount;
-
-    // Check for exact match (with small tolerance for rounding)
-    bool isMatch = amountsInBody.any(
-      (amount) => _isAmountMatch(amount, targetAmount),
-    );
-    if (!isMatch) {
-      isMatch = amountsInTitle.any(
-        (amount) => _isAmountMatch(amount, targetAmount),
-      );
-    }
-
-    if (isMatch) {
-      // AUTO DETECTION: Execute transaction!
       setState(() {
-        _debugLog = "💰 Pembayaran terdeteksi! Memproses transaksi...";
+        _debugLog = "💰 Pembayaran QRIS terdeteksi! Memproses...";
       });
       _executeTransaction(paymentMethod: 'qris');
+    });
+  }
+
+  void _startListening() {
+    // Demo mode: Show info and start simulated detection
+    if (mounted && !_isDisposed) {
+      setState(() {
+        _debugLog = "✅ Demo Mode Aktif\nPembayaran QRIS akan otomatis terdeteksi dalam 3 detik setelah Anda menekan 'Simulasi Bayar'.";
+      });
     }
   }
 
-  /// Extract currency amounts from text string.
-  /// Smart parsing that handles various Indonesian e-wallet and bank notification formats.
-  List<double> _extractCurrencyAmounts(String text) {
-    final List<double> amounts = [];
-    final Set<String> processedKeys = {};
-
-    void addAmount(double? amount) {
-      if (amount != null && amount > 0) {
-        final key = amount.toStringAsFixed(2);
-        if (!processedKeys.contains(key)) {
-          processedKeys.add(key);
-          amounts.add(amount);
-        }
-      }
-    }
-
-    // Pattern 1: Indonesian Rupiah with Rp/IDR prefix
-    final regexIDR = RegExp(
-      r'(?:Rp\.?|IDR)\s*([\d.,\s]+)',
-      caseSensitive: false,
-    );
-    for (final match in regexIDR.allMatches(text)) {
-      String numStr = (match.group(1) ?? "").trim();
-      numStr = numStr.replaceAll(RegExp(r'[.,\-]+$'), '');
-      numStr = numStr.replaceAll(' ', '');
-      final amount = _parseNumber(numStr);
-      addAmount(amount);
-    }
-
-    // Pattern 2: International format (USD)
-    final regexIntl = RegExp(r'(?:\$|USD)\s*([\d.,]+)', caseSensitive: false);
-    for (final match in regexIntl.allMatches(text)) {
-      String numStr = match.group(1) ?? "";
-      numStr = numStr.replaceAll(',', '');
-      addAmount(double.tryParse(numStr));
-    }
-
-    // Pattern 3: Amount with connector words (sejumlah, sebesar, senilai)
-    final regexWithConnector = RegExp(
-      r'(?:sebesar|sejumlah|senilai)\s*:?\s*([\d.,]+)',
-      caseSensitive: false,
-    );
-    for (final match in regexWithConnector.allMatches(text)) {
-      String numStr = match.group(1) ?? "";
-      final amount = _parseNumber(numStr);
-      addAmount(amount);
-    }
-
-    // Pattern 4: Contextual keywords followed directly by amounts
-    final regexContextual = RegExp(
-      r'(?:nominal|transfer|bayar|terima|masuk|total|jumlah|saldo|kredit|mutasi|diterima|dikreditkan|ditransfer)\s*:?\s*\+?\s*([\d.,]+)',
-      caseSensitive: false,
-    );
-    for (final match in regexContextual.allMatches(text)) {
-      String numStr = match.group(1) ?? "";
-      final amount = _parseNumber(numStr);
-      addAmount(amount);
-    }
-
-    // Pattern 5: E-wallet specific formats
-    final regexEwallet = RegExp(
-      r'(?:dana|gopay|ovo|shopeepay|linkaja|qris)\s+(?:masuk|diterima|berhasil|sukses|bertambah).*?([\d.,]+)',
-      caseSensitive: false,
-    );
-    for (final match in regexEwallet.allMatches(text)) {
-      String numStr = match.group(1) ?? "";
-      final amount = _parseNumber(numStr);
-      addAmount(amount);
-    }
-
-    // Pattern 6: Bank notification formats
-    final regexBank = RegExp(
-      r'(?:CR|kredit|debit|mutasi)\s*:?\s*(?:Rp\.?\s*)?([\d.,]+)',
-      caseSensitive: false,
-    );
-    for (final match in regexBank.allMatches(text)) {
-      String numStr = match.group(1) ?? "";
-      final amount = _parseNumber(numStr);
-      addAmount(amount);
-    }
-
-    // Pattern 7: Fallback - any standalone large number
-    final regexFallback = RegExp(r'\b([\d]{1,3}(?:[.,][\d]{3})+)\b');
-    for (final match in regexFallback.allMatches(text)) {
-      String numStr = match.group(1) ?? "";
-      final amount = _parseNumber(numStr);
-      if (amount != null && amount >= 1000) {
-        addAmount(amount);
-      }
-    }
-
-    return amounts;
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // No-op for demo mode
   }
 
-  double? _parseNumber(String numStr) {
-    if (numStr.isEmpty) return null;
 
-    if (numStr.contains('.') && numStr.contains(',')) {
-      final lastDot = numStr.lastIndexOf('.');
-      final lastComma = numStr.lastIndexOf(',');
-
-      if (lastComma > lastDot) {
-        final cleaned = numStr.replaceAll('.', '').replaceAll(',', '.');
-        return double.tryParse(cleaned);
-      } else {
-        final cleaned = numStr.replaceAll(',', '');
-        return double.tryParse(cleaned);
-      }
-    }
-
-    if (numStr.contains('.') && !numStr.contains(',')) {
-      final parts = numStr.split('.');
-      if (parts.length == 2 && parts[1].length <= 2) {
-        return double.tryParse(numStr);
-      }
-      final cleaned = numStr.replaceAll('.', '');
-      return double.tryParse(cleaned);
-    }
-
-    if (numStr.contains(',') && !numStr.contains('.')) {
-      final parts = numStr.split(',');
-      if (parts.length == 2 && parts[1].length <= 2) {
-        final cleaned = numStr.replaceAll(',', '.');
-        return double.tryParse(cleaned);
-      }
-      final cleaned = numStr.replaceAll(',', '');
-      return double.tryParse(cleaned);
-    }
-
-    return double.tryParse(numStr);
-  }
-
-  bool _isAmountMatch(double parsed, double target) {
-    return (parsed - target).abs() <= 1;
-  }
 
   // ============================================================
   // CENTRALIZED TRANSACTION EXECUTION
@@ -484,16 +172,7 @@ class _PaymentDialogState extends State<PaymentDialog>
     setState(() => _isLoading = true);
 
     try {
-      final result = _isPreviewMode
-          ? await _mockTransactionController.processTransaction(
-              cartItems: widget.cartItems,
-              totalAmount: widget.amount,
-              paymentMethod: paymentMethod,
-              staffUid: widget.staffUid,
-              cashReceived: cashReceived,
-              changeAmount: changeAmount,
-            )
-          : await _transactionController.processTransaction(
+      final result = await _mockTransactionController.processTransaction(
               cartItems: widget.cartItems,
               totalAmount: widget.amount,
               paymentMethod: paymentMethod,
@@ -524,7 +203,7 @@ class _PaymentDialogState extends State<PaymentDialog>
 
         // Show low stock warnings AFTER receipt dialog (non-blocking)
         if (result.hasWarnings && mounted && !_isDisposed) {
-          _showLowStockWarningDialog(result.warnings);
+          _showLowStockWarningDialog(result.warnings!);
         }
       } else {
         // FAILED: Show error and keep dialog open
@@ -560,7 +239,7 @@ class _PaymentDialogState extends State<PaymentDialog>
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: Row(
           children: [
-            Icon(Icons.warning_amber_rounded, color: Colors.orange, size: 28),
+            const Icon(Icons.warning_amber_rounded, color: Colors.orange, size: 28),
             const SizedBox(width: 10),
             Expanded(
               child: Text(
@@ -829,9 +508,9 @@ class _PaymentDialogState extends State<PaymentDialog>
                 // Success Header
                 Container(
                   padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
+                  decoration: const BoxDecoration(
                     color: AppColors.success,
-                    borderRadius: const BorderRadius.only(
+                    borderRadius: BorderRadius.only(
                       topLeft: Radius.circular(16),
                       topRight: Radius.circular(16),
                     ),
@@ -906,7 +585,7 @@ class _PaymentDialogState extends State<PaymentDialog>
                           },
                           style: OutlinedButton.styleFrom(
                             padding: const EdgeInsets.symmetric(vertical: 14),
-                            side: BorderSide(color: AppColors.textSecondary),
+                            side: const BorderSide(color: AppColors.textSecondary),
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(12),
                             ),
@@ -1038,51 +717,7 @@ class _PaymentDialogState extends State<PaymentDialog>
         );
   }
 
-  void _handleCheckStatus() async {
-    setState(() => _isLoading = true);
-    await Future.delayed(const Duration(seconds: 2));
-    if (!mounted || _isDisposed) return;
-    setState(() => _isLoading = false);
-    _showManualValidationDialog();
-  }
 
-  void _showManualValidationDialog() {
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (dialogContext) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Row(
-          children: [
-            Icon(Icons.warning_amber_rounded, color: Colors.orange),
-            SizedBox(width: 10),
-            Text("Konfirmasi Manual"),
-          ],
-        ),
-        content: const Text(
-          "Jika dana sudah masuk di mutasi, tekan 'Ya' untuk mencetak struk.",
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text("Batal", style: TextStyle(color: Colors.grey)),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              Navigator.pop(dialogContext);
-              // EXECUTE TRANSACTION on manual confirm!
-              _executeTransaction(paymentMethod: 'qris');
-            },
-            style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary),
-            child: const Text(
-              "Ya, Cetak",
-              style: TextStyle(color: Colors.white),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
 
   void _handleCashInput(String value) {
     setState(() {
@@ -1131,9 +766,9 @@ class _PaymentDialogState extends State<PaymentDialog>
           children: [
             // Tab Bar Header
             Container(
-              decoration: BoxDecoration(
+              decoration: const BoxDecoration(
                 color: AppColors.background,
-                borderRadius: const BorderRadius.only(
+                borderRadius: BorderRadius.only(
                   topLeft: Radius.circular(24),
                   topRight: Radius.circular(24),
                 ),
@@ -1280,16 +915,12 @@ class _PaymentDialogState extends State<PaymentDialog>
                         width: 10,
                         height: 10,
                         decoration: BoxDecoration(
-                          color: NotificationController.instance.isListening
-                              ? AppColors.success
-                              : AppColors.gold,
+                          color: AppColors.success,
                           shape: BoxShape.circle,
                           boxShadow: [
                             BoxShadow(
                               color:
-                                  (NotificationController.instance.isListening
-                                          ? AppColors.success
-                                          : AppColors.gold)
+                                  AppColors.success
                                       .withValues(alpha: 0.4),
                               blurRadius: 8,
                             ),
@@ -1298,9 +929,7 @@ class _PaymentDialogState extends State<PaymentDialog>
                       ),
                       const SizedBox(width: 8),
                       Text(
-                        NotificationController.instance.isListening
-                            ? "Menunggu Pembayaran"
-                            : "Menyiapkan...",
+                        "Demo Mode Aktif",
                         style: TextStyle(
                           fontSize: isTablet ? 12 : 11,
                           fontWeight: FontWeight.w600,
@@ -1309,7 +938,7 @@ class _PaymentDialogState extends State<PaymentDialog>
                       ),
                     ],
                   ),
-                  Divider(color: AppColors.accent, height: 20),
+                  const Divider(color: AppColors.accent, height: 20),
                   Text(
                     _debugLog,
                     textAlign: TextAlign.center,
@@ -1392,7 +1021,7 @@ class _PaymentDialogState extends State<PaymentDialog>
               width: double.infinity,
               height: isTablet ? 56 : 50,
               child: ElevatedButton(
-                onPressed: _isLoading ? null : _handleCheckStatus,
+                onPressed: _isLoading ? null : _startDemoQrisDetection,
                 style: ElevatedButton.styleFrom(
                   backgroundColor: AppColors.primary,
                   disabledBackgroundColor: AppColors.primary.withValues(
@@ -1413,7 +1042,7 @@ class _PaymentDialogState extends State<PaymentDialog>
                         ),
                       )
                     : Text(
-                        "Cek Status / Manual",
+                        "Simulasi Bayar QRIS",
                         style: TextStyle(
                           color: Colors.white,
                           fontSize: isTablet ? 17 : 16,
@@ -1536,11 +1165,11 @@ class _PaymentDialogState extends State<PaymentDialog>
                 fillColor: AppColors.background,
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(16),
-                  borderSide: BorderSide(color: AppColors.accent),
+                  borderSide: const BorderSide(color: AppColors.accent),
                 ),
                 focusedBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(16),
-                  borderSide: BorderSide(color: AppColors.primary, width: 2),
+                  borderSide: const BorderSide(color: AppColors.primary, width: 2),
                 ),
               ),
             ),
@@ -1556,7 +1185,7 @@ class _PaymentDialogState extends State<PaymentDialog>
                 label: Text("Uang Pas (Rp ${formatRupiah(widget.amount)})"),
                 style: OutlinedButton.styleFrom(
                   foregroundColor: AppColors.primary,
-                  side: BorderSide(color: AppColors.primary),
+                  side: const BorderSide(color: AppColors.primary),
                   padding: const EdgeInsets.symmetric(vertical: 14),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(12),

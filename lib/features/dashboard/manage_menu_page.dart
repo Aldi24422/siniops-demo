@@ -4,11 +4,8 @@ import 'package:google_fonts/google_fonts.dart';
 import '../../core/constants/app_colors.dart';
 import '../../core/models/product_model.dart';
 import '../../core/models/ingredient_model.dart';
-import '../../core/services/product_controller.dart';
-import '../../core/services/ingredient_controller.dart';
 import '../../core/services/mock_product_controller.dart';
 import '../../core/services/mock_ingredient_controller.dart';
-import '../../core/services/preview_mode_controller.dart';
 import '../../core/widgets/preview_mode_banner.dart';
 
 class ManageMenuPage extends StatefulWidget {
@@ -19,38 +16,28 @@ class ManageMenuPage extends StatefulWidget {
 }
 
 class _ManageMenuPageState extends State<ManageMenuPage> {
-  final ProductController _productController = ProductController();
-  final IngredientController _ingredientController = IngredientController();
   final MockProductController _mockProductController = MockProductController();
   final MockIngredientController _mockIngredientController =
       MockIngredientController();
 
-  bool get _isPreviewMode => PreviewModeController.instance.isPreviewMode;
+  // Always use mock controllers
+  Stream<List<Product>> get _productsStream =>
+      _mockProductController.getProducts();
 
-  // Conditional getters for controllers
-  Stream<List<Product>> get _productsStream => _isPreviewMode
-      ? _mockProductController.getProducts()
-      : _productController.getProducts();
+  Stream<List<Ingredient>> get _ingredientsStream =>
+      _mockIngredientController.getIngredients();
 
-  Stream<List<Ingredient>> get _ingredientsStream => _isPreviewMode
-      ? _mockIngredientController.getIngredients()
-      : _ingredientController.getIngredients();
+  Future<Ingredient?> _getIngredientById(String id) =>
+      _mockIngredientController.getIngredientById(id);
 
-  Future<Ingredient?> _getIngredientById(String id) => _isPreviewMode
-      ? _mockIngredientController.getIngredientById(id)
-      : _ingredientController.getIngredientById(id);
+  Future<String> _addProduct(Product product) =>
+      _mockProductController.addProduct(product);
 
-  Future<String> _addProduct(Product product) => _isPreviewMode
-      ? _mockProductController.addProduct(product)
-      : _productController.addProduct(product);
+  Future<void> _updateProduct(Product product) =>
+      _mockProductController.updateProduct(product);
 
-  Future<void> _updateProduct(Product product) => _isPreviewMode
-      ? _mockProductController.updateProduct(product)
-      : _productController.updateProduct(product);
-
-  Future<void> _deleteProduct(String id) => _isPreviewMode
-      ? _mockProductController.deleteProduct(id)
-      : _productController.deleteProduct(id);
+  Future<void> _deleteProduct(String id) =>
+      _mockProductController.deleteProduct(id);
 
   @override
   Widget build(BuildContext context) {

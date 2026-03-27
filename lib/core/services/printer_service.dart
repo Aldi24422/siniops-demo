@@ -496,7 +496,7 @@ class PrinterService {
     int i = 8;
     int greyscaleCoefficientInit = 0;
     const gradientStep = 6;
-    final colorLevelStep = 765.0 / (15 * gradientStep + gradientStep - 1);
+    const colorLevelStep = 765.0 / (15 * gradientStep + gradientStep - 1);
 
     for (int posY = 0; posY < bitmapHeight; posY++) {
       int greyscaleCoefficient = greyscaleCoefficientInit;

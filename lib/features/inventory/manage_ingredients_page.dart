@@ -3,9 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../core/constants/app_colors.dart';
 import '../../core/models/ingredient_model.dart';
-import '../../core/services/ingredient_controller.dart';
 import '../../core/services/mock_ingredient_controller.dart';
-import '../../core/services/preview_mode_controller.dart';
 import '../../core/widgets/preview_mode_banner.dart';
 
 class ManageIngredientsPage extends StatefulWidget {
@@ -16,31 +14,24 @@ class ManageIngredientsPage extends StatefulWidget {
 }
 
 class _ManageIngredientsPageState extends State<ManageIngredientsPage> {
-  final IngredientController _ingredientController = IngredientController();
   final MockIngredientController _mockIngredientController =
       MockIngredientController();
 
-  bool get _isPreviewMode => PreviewModeController.instance.isPreviewMode;
+  // Always use mock controllers
+  Stream<List<Ingredient>> get _ingredientsStream =>
+      _mockIngredientController.getIngredients();
 
-  Stream<List<Ingredient>> get _ingredientsStream => _isPreviewMode
-      ? _mockIngredientController.getIngredients()
-      : _ingredientController.getIngredients();
+  Future<String> _addIngredient(Ingredient ing) =>
+      _mockIngredientController.addIngredient(ing);
 
-  Future<String> _addIngredient(Ingredient ing) => _isPreviewMode
-      ? _mockIngredientController.addIngredient(ing)
-      : _ingredientController.addIngredient(ing);
+  Future<void> _updateIngredient(Ingredient ing) =>
+      _mockIngredientController.updateIngredient(ing);
 
-  Future<void> _updateIngredient(Ingredient ing) => _isPreviewMode
-      ? _mockIngredientController.updateIngredient(ing)
-      : _ingredientController.updateIngredient(ing);
+  Future<void> _deleteIngredient(String id) =>
+      _mockIngredientController.deleteIngredient(id);
 
-  Future<void> _deleteIngredient(String id) => _isPreviewMode
-      ? _mockIngredientController.deleteIngredient(id)
-      : _ingredientController.deleteIngredient(id);
-
-  Future<void> _restockIngredient(String id, double amount) => _isPreviewMode
-      ? _mockIngredientController.restockIngredient(id, amount)
-      : _ingredientController.restockIngredient(id, amount);
+  Future<void> _restockIngredient(String id, double amount) =>
+      _mockIngredientController.restockIngredient(id, amount);
 
   @override
   Widget build(BuildContext context) {

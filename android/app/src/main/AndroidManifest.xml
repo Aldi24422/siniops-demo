@@ -40,9 +40,9 @@
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
     <application
-        android:label="siniops"
+        android:label="siniops-demo"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/launcher_icon">
         
         <activity
             android:name=".MainActivity"
@@ -62,25 +62,6 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
-
-        <!-- Notification Listener Service with Android 14 compatibility -->
-        <service
-            android:name="im.zoe.labs.flutter_notification_listener.NotificationsHandlerService"
-            android:label="SiniOps Notification Listener"
-            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
-            android:exported="true"
-            android:foregroundServiceType="specialUse"
-            tools:replace="android:label,android:foregroundServiceType"> 
-            
-            <intent-filter>
-                <action android:name="android.service.notification.NotificationListenerService" />
-            </intent-filter>
-            
-            <!-- Required property for specialUse type on Android 14+ -->
-            <property
-                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="notification_listener" />
-        </service>
 
         <meta-data
             android:name="flutterEmbedding"

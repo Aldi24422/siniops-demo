@@ -2,7 +2,25 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import '../models/product_model.dart';
 import 'preview_mode_controller.dart';
-import 'transaction_controller.dart' show TransactionResult;
+
+/// Transaction result model (previously in transaction_controller.dart)
+class TransactionResult {
+  final bool success;
+  final String? transactionId;
+  final String? message;
+  final List<String>? errors;
+  final List<String>? warnings;
+
+  bool get hasWarnings => warnings != null && warnings!.isNotEmpty;
+
+  TransactionResult({
+    required this.success,
+    this.transactionId,
+    this.message,
+    this.errors,
+    this.warnings,
+  });
+}
 
 /// Mock Transaction Controller for Preview Mode
 /// All operations are performed in-memory only
@@ -255,5 +273,28 @@ class MockTransactionController {
       'start': DateTime(now.year, 1, 1),
       'end': DateTime(now.year, 12, 31, 23, 59, 59),
     };
+  }
+
+  /// Get transactions for a date range (used by transaction history page)
+  Future<List<Map<String, dynamic>>> getTransactionsForPeriod(
+    DateTime startDate,
+    DateTime endDate, {
+    int limit = 200,
+  }) async {
+    final results = <Map<String, dynamic>>[];
+
+    for (final txn in _store.transactions) {
+      final createdAt = txn['createdAt'] as DateTime;
+      if (createdAt.isAfter(startDate.subtract(const Duration(days: 1))) &&
+          createdAt.isBefore(endDate.add(const Duration(days: 1)))) {
+        results.add(txn);
+      }
+    }
+
+    // Sort newest first
+    results.sort((a, b) => (b['createdAt'] as DateTime)
+        .compareTo(a['createdAt'] as DateTime));
+
+    return results.take(limit).toList();
   }
 }

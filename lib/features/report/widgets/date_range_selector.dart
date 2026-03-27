@@ -308,7 +308,7 @@ class _DateRangeSelectorState extends State<DateRangeSelector>
                         color: AppColors.accent.withValues(alpha: 0.5),
                         borderRadius: BorderRadius.circular(10),
                       ),
-                      child: Icon(
+                      child: const Icon(
                         Icons.edit_rounded,
                         color: AppColors.secondary,
                         size: 18,

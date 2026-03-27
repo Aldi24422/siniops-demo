@@ -205,7 +205,7 @@ class _PrinterSettingsPageState extends State<PrinterSettingsPage> {
       builder: (context) => AlertDialog(
         title: Row(
           children: [
-            Icon(Icons.bluetooth_disabled, color: AppColors.error),
+            const Icon(Icons.bluetooth_disabled, color: AppColors.error),
             const SizedBox(width: 12),
             Expanded(
               child: Text(

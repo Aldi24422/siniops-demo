@@ -62,11 +62,15 @@ class MockDataStore {
   // Transactions
   late List<Map<String, dynamic>> transactions;
 
+  // Staff (managed by MockAuthController, stored as dynamic to avoid circular deps)
+  late List<dynamic> staffList;
+
   /// Reset all data to initial mock values
   void reset() {
     products = _getInitialProducts();
     ingredients = _getInitialIngredients();
     transactions = _getInitialTransactions();
+    staffList = [];
   }
 
   // ============ INITIAL MOCK DATA ============

@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../core/constants/app_colors.dart';
-import '../../core/services/auth_controller.dart';
+import '../../core/services/mock_auth_controller.dart';
+import '../../core/services/preview_mode_controller.dart';
 
 class ManageStaffPage extends StatefulWidget {
   const ManageStaffPage({super.key});
@@ -11,7 +12,7 @@ class ManageStaffPage extends StatefulWidget {
 }
 
 class _ManageStaffPageState extends State<ManageStaffPage> {
-  final AuthController _authController = AuthController();
+  final MockAuthController _authController = MockAuthController.instance;
 
   // Form controllers for add dialog
   final _nameController = TextEditingController();
@@ -20,20 +21,12 @@ class _ManageStaffPageState extends State<ManageStaffPage> {
 
   bool _isAdding = false;
   String? _deletingUid;
-  String? _currentUserRole; // To determine what roles can be added
+  String _currentUserRole = 'owner';
 
   @override
   void initState() {
     super.initState();
-    _fetchCurrentUserRole();
-  }
-
-  Future<void> _fetchCurrentUserRole() async {
-    final uid = _authController.currentUser?.uid;
-    if (uid != null) {
-      final role = await _authController.getUserRole(uid);
-      if (mounted) setState(() => _currentUserRole = role);
-    }
+    _currentUserRole = PreviewModeController.instance.previewRole;
   }
 
   @override
@@ -61,12 +54,9 @@ class _ManageStaffPageState extends State<ManageStaffPage> {
     _emailController.clear();
     _passwordController.clear();
 
-    // Local state
     bool isPasswordObscure = true;
-    String selectedRole = 'crew'; // Default
+    String selectedRole = 'crew';
 
-    // Determine available roles based on current user (simplified for now)
-    // Owner can add everyone. Outlet Manager should only be able to add Crew.
     final bool isOwner = _currentUserRole == 'owner';
     final List<Map<String, String>> roleOptions = [
       {'value': 'crew', 'label': 'Crew'},
@@ -112,7 +102,6 @@ class _ManageStaffPageState extends State<ManageStaffPage> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  // Role Dropdown (only if multiple choices)
                   if (roleOptions.length > 1) ...[
                     InputDecorator(
                       decoration: InputDecoration(
@@ -159,7 +148,6 @@ class _ManageStaffPageState extends State<ManageStaffPage> {
                     const SizedBox(height: 16),
                   ],
 
-                  // Name Field
                   TextField(
                     controller: _nameController,
                     decoration: InputDecoration(
@@ -183,7 +171,6 @@ class _ManageStaffPageState extends State<ManageStaffPage> {
                   ),
                   const SizedBox(height: 16),
 
-                  // Email Field
                   TextField(
                     controller: _emailController,
                     keyboardType: TextInputType.emailAddress,
@@ -207,7 +194,6 @@ class _ManageStaffPageState extends State<ManageStaffPage> {
                   ),
                   const SizedBox(height: 16),
 
-                  // Password Field
                   TextField(
                     controller: _passwordController,
                     obscureText: isPasswordObscure,
@@ -343,9 +329,7 @@ class _ManageStaffPageState extends State<ManageStaffPage> {
           style: GoogleFonts.poppins(fontWeight: FontWeight.w600),
         ),
         content: Text(
-          staff.role == 'owner'
-              ? "Karena ${staff.displayName} adalah Owner, permintaan konfirmasi akan dikirim ke akun mereka sebelum dihapus.\n\nLanjutkan?"
-              : "Anda yakin ingin menghapus akun ${staff.displayName}?\n\nTindakan ini permanen dan pengguna tidak akan bisa login lagi.",
+          "Anda yakin ingin menghapus akun ${staff.displayName}?\n\nIni adalah demo, data akan direset saat reload.",
           style: GoogleFonts.lexendDeca(),
         ),
         actions: [
@@ -355,11 +339,11 @@ class _ManageStaffPageState extends State<ManageStaffPage> {
           ),
           TextButton(
             onPressed: () async {
-              Navigator.pop(context); // Close dialog
+              Navigator.pop(context);
               _deleteStaff(staff);
             },
             child: Text(
-              staff.role == 'owner' ? "Kirim Permintaan" : "Hapus",
+              "Hapus",
               style: GoogleFonts.lexendDeca(
                 color: AppColors.error,
                 fontWeight: FontWeight.bold,
@@ -374,27 +358,13 @@ class _ManageStaffPageState extends State<ManageStaffPage> {
   Future<void> _deleteStaff(StaffData staff) async {
     setState(() => _deletingUid = staff.uid);
 
-    bool success = false;
-
-    // Special logic for Owner deletion
-    if (staff.role == 'owner') {
-      success = await _authController.requestOwnerDeletion(staff.uid);
-      if (success && mounted) {
-        _showSnackBar(
-          'Permintaan penghapusan telah dikirim ke ${staff.displayName}',
-        );
-      }
-    } else {
-      // Normal deletion for crew/manager
-      success = await _authController.deleteStaff(staff.uid);
-      if (success && mounted) {
-        _showSnackBar('Akun berhasil dihapus');
-      }
-    }
+    final success = await _authController.deleteStaff(staff.uid);
 
     if (mounted) {
       setState(() => _deletingUid = null);
-      if (!success) {
+      if (success) {
+        _showSnackBar('Akun berhasil dihapus');
+      } else {
         _showSnackBar('Gagal memproses permintaan', isError: true);
       }
     }
@@ -444,9 +414,7 @@ class _ManageStaffPageState extends State<ManageStaffPage> {
         ),
       ),
       body: StreamBuilder<List<StaffData>>(
-        stream: _currentUserRole == null
-            ? const Stream.empty()
-            : _authController.getStaff(_currentUserRole!),
+        stream: _authController.getStaff(_currentUserRole),
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const Center(
@@ -472,15 +440,6 @@ class _ManageStaffPageState extends State<ManageStaffPage> {
                       color: AppColors.textSecondary,
                     ),
                   ),
-                  const SizedBox(height: 8),
-                  Text(
-                    snapshot.error.toString(),
-                    style: GoogleFonts.lexendDeca(
-                      fontSize: 12,
-                      color: AppColors.error,
-                    ),
-                    textAlign: TextAlign.center,
-                  ),
                 ],
               ),
             );
@@ -492,7 +451,6 @@ class _ManageStaffPageState extends State<ManageStaffPage> {
             return _buildEmptyState();
           }
 
-          // Sort: Owner (0) > Manager (1) > Crew/Cashier (2)
           final sortedList = List<StaffData>.from(staffList);
           sortedList.sort((a, b) {
             int getRank(String role) {
@@ -500,7 +458,6 @@ class _ManageStaffPageState extends State<ManageStaffPage> {
               if (role == 'outlet_manager') return 1;
               return 2;
             }
-
             return getRank(a.role).compareTo(getRank(b.role));
           });
 
@@ -556,9 +513,8 @@ class _ManageStaffPageState extends State<ManageStaffPage> {
 
   Widget _buildStaffCard(StaffData staff) {
     final isDeleting = _deletingUid == staff.uid;
-    final currentUserUid = _authController.currentUser?.uid;
+    final currentUserUid = _authController.currentUserUid;
 
-    // Use specific colors for roles
     Color roleColor;
     String roleLabel;
 
@@ -572,7 +528,7 @@ class _ManageStaffPageState extends State<ManageStaffPage> {
         roleLabel = 'Manager';
         break;
       case 'crew':
-      case 'cashier': // Legacy support
+      case 'cashier':
         roleColor = Colors.blue;
         roleLabel = 'Crew';
         break;
@@ -582,9 +538,6 @@ class _ManageStaffPageState extends State<ManageStaffPage> {
         break;
     }
 
-    // Permission Logic for Deletion
-    // Owner can delete anyone except themselves.
-    // Outlet Manager can only delete Crew. NOT other managers or owners.
     bool canDelete = false;
     if (_currentUserRole == 'owner') {
       canDelete = staff.uid != currentUserUid;
@@ -599,12 +552,11 @@ class _ManageStaffPageState extends State<ManageStaffPage> {
         side: BorderSide(color: Colors.grey.withValues(alpha: 0.1), width: 1),
       ),
       elevation: 0,
-      color: AppColors.background, // Light background for card
+      color: AppColors.background,
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Row(
           children: [
-            // Avatar
             Container(
               width: 48,
               height: 48,
@@ -625,7 +577,6 @@ class _ManageStaffPageState extends State<ManageStaffPage> {
             ),
             const SizedBox(width: 16),
 
-            // Info (Name & Email)
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -644,7 +595,6 @@ class _ManageStaffPageState extends State<ManageStaffPage> {
                         ),
                       ),
                       const SizedBox(width: 8),
-                      // Role Badge (Next to name)
                       Container(
                         padding: const EdgeInsets.symmetric(
                           horizontal: 8,
@@ -677,7 +627,6 @@ class _ManageStaffPageState extends State<ManageStaffPage> {
               ),
             ),
 
-            // Delete Button (if permitted)
             if (canDelete)
               IconButton(
                 onPressed: isDeleting ? null : () => _confirmDelete(staff),

@@ -1,9 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
 import '../../core/constants/app_colors.dart';
-import '../../core/services/transaction_controller.dart';
+import '../../core/services/mock_transaction_controller.dart';
 
 class TransactionHistoryPage extends StatefulWidget {
   final DateTime? startDate;
@@ -22,7 +21,7 @@ class TransactionHistoryPage extends StatefulWidget {
 }
 
 class _TransactionHistoryPageState extends State<TransactionHistoryPage> {
-  final TransactionController _controller = TransactionController();
+  final MockTransactionController _controller = MockTransactionController();
   List<Map<String, dynamic>> _transactions = [];
   bool _isLoading = true;
 
@@ -65,11 +64,10 @@ class _TransactionHistoryPageState extends State<TransactionHistoryPage> {
     return formatter.format(value);
   }
 
-  String _formatDate(Timestamp? timestamp) {
-    if (timestamp == null) return '-';
-    final date = timestamp.toDate();
+  String _formatDate(DateTime? dateTime) {
+    if (dateTime == null) return '-';
     final formatter = DateFormat('EEEE, d MMMM yyyy', 'id_ID');
-    return formatter.format(date);
+    return formatter.format(dateTime);
   }
 
   @override
@@ -150,8 +148,8 @@ class _TransactionHistoryPageState extends State<TransactionHistoryPage> {
     final Map<String, List<Map<String, dynamic>>> groupedByDate = {};
 
     for (final txn in _transactions) {
-      final timestamp = txn['createdAt'] as Timestamp?;
-      final dateKey = _formatDate(timestamp);
+      final dateTime = txn['createdAt'] as DateTime?;
+      final dateKey = _formatDate(dateTime);
 
       if (!groupedByDate.containsKey(dateKey)) {
         groupedByDate[dateKey] = [];
@@ -232,9 +230,9 @@ class _TransactionHistoryPageState extends State<TransactionHistoryPage> {
     final totalAmount = (txn['totalAmount'] ?? 0).toDouble();
     final items = txn['items'] as List<dynamic>? ?? [];
     final paymentMethod = txn['paymentMethod'] ?? 'cash';
-    final timestamp = txn['createdAt'] as Timestamp?;
-    final timeString = timestamp != null
-        ? DateFormat('HH:mm').format(timestamp.toDate())
+    final dateTime = txn['createdAt'] as DateTime?;
+    final timeString = dateTime != null
+        ? DateFormat('HH:mm').format(dateTime)
         : '-';
 
     return Container(
@@ -348,7 +346,7 @@ class _TransactionHistoryPageState extends State<TransactionHistoryPage> {
                     ),
                     decoration: BoxDecoration(
                       border: entry.key < items.length - 1
-                          ? Border(
+                          ? const Border(
                               bottom: BorderSide(
                                 color: AppColors.accent,
                                 width: 1,

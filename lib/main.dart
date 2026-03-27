@@ -1,23 +1,18 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:firebase_core/firebase_core.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/date_symbol_data_local.dart';
 import 'core/constants/app_colors.dart';
-import 'core/services/auth_controller.dart';
+import 'core/services/preview_mode_controller.dart';
 import 'features/auth/login_page.dart';
-import 'features/dashboard/owner_dashboard.dart';
-import 'features/dashboard/crew_dashboard.dart';
-import 'firebase_options.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Initialize Firebase
-  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-
   // Initialize Indonesian locale for intl package
   await initializeDateFormatting('id_ID', null);
+
+  // Initialize demo mode
+  PreviewModeController.instance.enterPreviewMode(role: 'owner');
 
   // Preload Google Fonts to prevent font flash
   await GoogleFonts.pendingFonts([
@@ -37,10 +32,10 @@ class SiniOpsApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'SiniOps Enterprise',
+      title: 'SiniOps Demo',
       debugShowCheckedModeBanner: false,
       theme: _buildTheme(),
-      home: const AuthGate(),
+      home: const LoginPage(),
     );
   }
 
@@ -103,72 +98,6 @@ class SiniOpsApp extends StatelessWidget {
           elevation: 0,
         ),
       ),
-    );
-  }
-}
-
-/// Auth Gate - Listens to auth state changes
-/// Prevents logout/crash when permission changes restart the app
-class AuthGate extends StatelessWidget {
-  const AuthGate({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return StreamBuilder<User?>(
-      stream: FirebaseAuth.instance.authStateChanges(),
-      builder: (context, snapshot) {
-        // Loading state
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Scaffold(
-            backgroundColor: AppColors.background,
-            body: Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  CircularProgressIndicator(color: AppColors.primary),
-                  SizedBox(height: 16),
-                  Text(
-                    "Memuat...",
-                    style: TextStyle(color: AppColors.textSecondary),
-                  ),
-                ],
-              ),
-            ),
-          );
-        }
-
-        // User is logged in
-        if (snapshot.hasData && snapshot.data != null) {
-          return FutureBuilder<String?>(
-            future: AuthController().getUserRole(snapshot.data!.uid),
-            builder: (context, roleSnapshot) {
-              // Still loading role
-              if (roleSnapshot.connectionState == ConnectionState.waiting) {
-                return const Scaffold(
-                  backgroundColor: AppColors.background,
-                  body: Center(
-                    child: CircularProgressIndicator(color: AppColors.primary),
-                  ),
-                );
-              }
-
-              final role = roleSnapshot.data;
-
-              if (role == 'owner' || role == 'outlet_manager') {
-                return const OwnerDashboard();
-              } else if (role == 'crew') {
-                return const CrewDashboard();
-              } else {
-                // Unknown role or error - go to login
-                return const LoginPage();
-              }
-            },
-          );
-        }
-
-        // User not logged in
-        return const LoginPage();
-      },
     );
   }
 }

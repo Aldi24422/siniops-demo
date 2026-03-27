@@ -3,7 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:intl/intl.dart';
 import '../../core/constants/app_colors.dart';
-import '../../core/services/transaction_controller.dart';
+import '../../core/services/mock_transaction_controller.dart';
 import 'transaction_history_page.dart';
 import 'widgets/date_range_selector.dart';
 
@@ -15,7 +15,7 @@ class ReportPage extends StatefulWidget {
 }
 
 class _ReportPageState extends State<ReportPage> {
-  final TransactionController _controller = TransactionController();
+  final MockTransactionController _controller = MockTransactionController();
 
   // Date range state
   DateTime _startDate = DateTime.now();
@@ -441,7 +441,7 @@ class _ReportPageState extends State<ReportPage> {
             drawVerticalLine: false,
             horizontalInterval: maxValue > 0 ? maxValue / 4 : 25000,
             getDrawingHorizontalLine: (value) =>
-                FlLine(color: AppColors.accent, strokeWidth: 1),
+                const FlLine(color: AppColors.accent, strokeWidth: 1),
           ),
           borderData: FlBorderData(show: false),
           barGroups: List.generate(entries.length, (index) {
@@ -497,7 +497,7 @@ class _ReportPageState extends State<ReportPage> {
         physics: const NeverScrollableScrollPhysics(),
         itemCount: _topProducts.length,
         separatorBuilder: (context, index) =>
-            Divider(color: AppColors.accent, height: 1),
+            const Divider(color: AppColors.accent, height: 1),
         itemBuilder: (context, index) {
           final product = _topProducts[index];
           final rank = index + 1;
@@ -604,7 +604,7 @@ class _ReportPageState extends State<ReportPage> {
       ),
       child: Column(
         children: [
-          Icon(Icons.analytics_outlined, size: 48, color: AppColors.accent),
+          const Icon(Icons.analytics_outlined, size: 48, color: AppColors.accent),
           const SizedBox(height: 12),
           Text(
             message,

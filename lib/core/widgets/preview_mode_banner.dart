@@ -3,17 +3,13 @@ import 'package:google_fonts/google_fonts.dart';
 import '../services/preview_mode_controller.dart';
 import '../../features/auth/login_page.dart';
 
-/// A banner widget that shows when app is in Preview Mode
-/// Displays at top of screen to indicate data won't be saved
+/// A banner widget that shows when app is in Demo Mode
+/// Displays at top of screen to indicate data is in-memory only
 class PreviewModeBanner extends StatelessWidget {
   const PreviewModeBanner({super.key});
 
   @override
   Widget build(BuildContext context) {
-    if (!PreviewModeController.instance.isPreviewMode) {
-      return const SizedBox.shrink();
-    }
-
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
@@ -29,11 +25,11 @@ class PreviewModeBanner extends StatelessWidget {
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const Icon(Icons.visibility_rounded, color: Colors.white, size: 18),
+            const Icon(Icons.science_rounded, color: Colors.white, size: 18),
             const SizedBox(width: 8),
             Flexible(
               child: Text(
-                "PREVIEW MODE - Data tidak tersimpan",
+                "DEMO MODE - Data tidak tersimpan permanen",
                 style: GoogleFonts.lexendDeca(
                   color: Colors.white,
                   fontSize: 12,
@@ -44,7 +40,7 @@ class PreviewModeBanner extends StatelessWidget {
             ),
             const SizedBox(width: 12),
             GestureDetector(
-              onTap: () => _exitPreviewMode(context),
+              onTap: () => _exitToRolePicker(context),
               child: Container(
                 padding: const EdgeInsets.symmetric(
                   horizontal: 10,
@@ -55,7 +51,7 @@ class PreviewModeBanner extends StatelessWidget {
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: Text(
-                  "Keluar",
+                  "Ganti Role",
                   style: GoogleFonts.lexendDeca(
                     color: Colors.white,
                     fontSize: 11,
@@ -70,8 +66,8 @@ class PreviewModeBanner extends StatelessWidget {
     );
   }
 
-  void _exitPreviewMode(BuildContext context) {
-    PreviewModeController.instance.exitPreviewMode();
+  void _exitToRolePicker(BuildContext context) {
+    PreviewModeController.instance.resetMockData();
     Navigator.pushAndRemoveUntil(
       context,
       MaterialPageRoute(builder: (_) => const LoginPage()),

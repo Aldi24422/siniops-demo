@@ -1,11 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../core/constants/app_colors.dart';
 import '../../core/models/product_model.dart';
-import '../../core/services/product_controller.dart';
 import '../../core/services/mock_product_controller.dart';
+import '../../core/services/mock_auth_controller.dart';
 import '../../core/services/preview_mode_controller.dart';
 import '../../core/widgets/preview_mode_banner.dart';
 import '../transaction/payment_dialog.dart';
@@ -20,48 +18,26 @@ class CrewDashboard extends StatefulWidget {
 }
 
 class _CrewDashboardState extends State<CrewDashboard> {
-  final ProductController _productController = ProductController();
   final MockProductController _mockProductController = MockProductController();
   final List<Product> _localProducts = [];
 
-  // User data
-  String _displayName = 'Crew';
-  String _userEmail = '';
-
-  bool get _isPreviewMode => PreviewModeController.instance.isPreviewMode;
+  // User data (demo)
+  String _displayName = 'Demo Kasir';
+  String _userEmail = 'crew@siniops.demo';
 
   @override
   void initState() {
     super.initState();
-    _loadUserData();
+    _loadDemoUserData();
   }
 
-  /// Load user data from Firestore (skip in preview mode)
-  Future<void> _loadUserData() async {
-    if (_isPreviewMode) {
-      setState(() {
-        _displayName = 'Demo Kasir';
-        _userEmail = 'demo@siniops.id';
-      });
-      return;
-    }
-    try {
-      final user = FirebaseAuth.instance.currentUser;
-      if (user != null) {
-        final doc = await FirebaseFirestore.instance
-            .collection('users')
-            .doc(user.uid)
-            .get();
-        if (doc.exists && mounted) {
-          setState(() {
-            _displayName = doc.data()?['displayName'] ?? 'Crew';
-            _userEmail = doc.data()?['email'] ?? user.email ?? '';
-          });
-        }
-      }
-    } catch (e) {
-      debugPrint('[CrewDashboard] Error loading user data: $e');
-    }
+  /// Load demo user data
+  void _loadDemoUserData() {
+    final mockAuth = MockAuthController.instance;
+    setState(() {
+      _displayName = mockAuth.currentUserDisplayName ?? 'Demo Kasir';
+      _userEmail = 'crew@siniops.demo';
+    });
   }
 
   /// Format name: First 2 names full, rest as initials
@@ -183,9 +159,7 @@ class _CrewDashboardState extends State<CrewDashboard> {
 
                     // Product List with StreamBuilder
                     StreamBuilder<List<Product>>(
-                      stream: _isPreviewMode
-                          ? _mockProductController.getProducts()
-                          : _productController.getProducts(),
+                      stream: _mockProductController.getProducts(),
                       builder: (context, snapshot) {
                         if (snapshot.hasError) {
                           return Center(
@@ -348,7 +322,7 @@ class _CrewDashboardState extends State<CrewDashboard> {
                     child: Container(
                       width: 40,
                       height: 40,
-                      decoration: BoxDecoration(
+                      decoration: const BoxDecoration(
                         color: AppColors.primary,
                         shape: BoxShape.circle,
                       ),
@@ -480,11 +454,7 @@ class _CrewDashboardState extends State<CrewDashboard> {
                 MaterialPageRoute(builder: (_) => const PrinterSettingsPage()),
               );
             } else if (val == 'logout') {
-              if (_isPreviewMode) {
-                PreviewModeController.instance.exitPreviewMode();
-              } else {
-                FirebaseAuth.instance.signOut();
-              }
+              PreviewModeController.instance.resetMockData();
               Navigator.pushReplacement(
                 context,
                 MaterialPageRoute(builder: (_) => const LoginPage()),
@@ -615,7 +585,7 @@ class _CrewDashboardState extends State<CrewDashboard> {
                           builder: (context) => PaymentDialog(
                             amount: _totalPrice,
                             cartItems: itemsToCheckout,
-                            staffUid: FirebaseAuth.instance.currentUser?.uid,
+                            staffUid: MockAuthController.instance.currentUserUid,
                             staffName: _formatDisplayName(_displayName),
                           ),
                         ).then((result) {

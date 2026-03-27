@@ -395,7 +395,7 @@ class ReceiptPreviewWidget extends StatelessWidget {
                           Row(
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
-                              Icon(
+                              const Icon(
                                 Icons.wifi,
                                 size: 14,
                                 color: AppColors.textSecondary,
@@ -463,8 +463,8 @@ class ReceiptPreviewWidget extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 8),
       child: LayoutBuilder(
         builder: (context, constraints) {
-          final dashWidth = 5.0;
-          final dashSpace = 3.0;
+          const dashWidth = 5.0;
+          const dashSpace = 3.0;
           final dashCount = (constraints.maxWidth / (dashWidth + dashSpace))
               .floor();
           return Row(
@@ -473,7 +473,7 @@ class ReceiptPreviewWidget extends StatelessWidget {
               return Container(
                 width: dashWidth,
                 height: 1,
-                margin: EdgeInsets.only(right: dashSpace),
+                margin: const EdgeInsets.only(right: dashSpace),
                 color: AppColors.textSecondary.withValues(alpha: 0.3),
               );
             }),
